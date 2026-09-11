@@ -64,9 +64,22 @@ src/
     wmi.rs           raw COM over the Wbem vtables, hand-declared
     elevate.rs       self-elevation via ShellExecuteExW "runas"
     console.rs       ENABLE_VIRTUAL_TERMINAL_PROCESSING probe
+  known_services.rs  generated table of 70 Windows service names (see below)
 rules/
   irscan.yar         our own bundled YARA rules (embedded with include_str!)
+tools/
+  gen_known_services.py   vendoring step for known_services.rs (not part of the build)
+  check_generated.sh      proves build.rs output is deterministic
 ```
+
+`known_services.rs` is **generated, not written**: `tools/gen_known_services.py` parses
+a TypeScript knowledge base from AdventDevInc/kudu (MIT) and emits a sorted, deduplicated
+Rust table whose re-run is byte-identical. Hand-transcribing seventy security-relevant
+service names is how a tool acquires a quiet typo that makes it lie, so the table is
+produced mechanically and its generator is committed alongside it. The header of the
+generated file names the upstream path and licence. `tools/` is deliberately outside the
+build: `raw/` is not in version control, so regeneration is a vendoring step run by hand,
+not something CI could repeat.
 
 **Dependency direction is strictly downward:** `main -> collect -> {model, rules, signatures, win}`.
 `model`, `rules`, `text`, `signatures` and `report` never touch the OS, which is what makes them

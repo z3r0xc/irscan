@@ -365,11 +365,9 @@ fn report_command(ctx: &mut ScanContext, command: &str, location: &str, name: &s
     if exe.is_empty() {
         return;
     }
-    if !crate::rules::is_user_writable(&exe) {
-        return;
-    }
+    let exe_location = crate::rules::classify_location(&exe);
     let trusted = signature_trust(&exe);
-    let Some(severity) = crate::rules::execution_severity(trusted, true) else {
+    let Some(severity) = autostart_severity(trusted, &exe) else {
         return;
     };
     let trust_line = match trusted {
@@ -377,24 +375,52 @@ fn report_command(ctx: &mut ScanContext, command: &str, location: &str, name: &s
         Some(false) => "signature: NOT valid".to_string(),
         None => "signature: could not be verified".to_string(),
     };
+    // The title says why this entry is a finding. A privileged location is only
+    // reported when the image is unsigned; the other two are reported for the
+    // location itself, so the old "user-writable" wording is no longer accurate.
+    let title = match exe_location {
+        crate::rules::Location::Drop => {
+            format!("Autostart entry runs from a transit directory: {name}")
+        }
+        crate::rules::Location::AppData => {
+            format!("Autostart entry runs from a per-user data directory: {name}")
+        }
+        crate::rules::Location::Privileged => {
+            format!("Autostart entry runs an unsigned executable: {name}")
+        }
+    };
+    let rationale = if exe_location == crate::rules::Location::Privileged {
+        "The executable is not validly signed, so the publisher cannot be established."
+    } else {
+        "A user-writable path can be modified by any process running as this user, so an \
+         autostart entry there executes whatever replaces the file, with no prompt."
+    };
     ctx.add(
-        Finding::new(
-            severity,
-            "persistence",
-            format!("Autostart entry runs from a user-writable path: {name}"),
-        )
-        .evidence(format!("{location}\\{name} = {command}"))
-        .evidence(format!("Executable: {exe}"))
-        .evidence(trust_line)
-        .evidence(
-            "A user-writable path can be modified by any process running as this user, so an \
-             autostart entry there executes whatever replaces the file, with no prompt.",
-        )
-        .remediation(
-            "If this is not software you installed, move the file to external media for \
-             analysis and disable the autostart entry.",
-        ),
+        Finding::new(severity, "persistence", title)
+            .evidence(format!("{location}\\{name} = {command}"))
+            .evidence(format!("Executable: {exe}"))
+            .evidence(trust_line)
+            .evidence(rationale)
+            .remediation(
+                "If this is not software you installed, move the file to external media for \
+                 analysis and disable the autostart entry.",
+            ),
     );
+}
+
+/// The severity an autostart command earns, or `None` when it earns nothing.
+///
+/// Pure: the caller supplies the signature result, so the whole decision is testable
+/// without the registry or the signature machinery. The shared location policy is the
+/// only severity source - this function adds no rule of its own.
+fn autostart_severity(trusted: Option<bool>, exe: &str) -> Option<Severity> {
+    let location = crate::rules::classify_location(exe);
+    // A signed binary under Program Files is the ordinary case: normal software
+    // autostarting itself. There is nothing here to report.
+    if location == crate::rules::Location::Privileged && trusted == Some(true) {
+        return None;
+    }
+    crate::rules::execution_severity(trusted, location)
 }
 
 /// Signature trust for a path, or `None` when the file is absent or the check
@@ -625,5 +651,39 @@ mod tests {
         assert!(!is_default_boot_execute(&[
             r"\??\C:\Windows\Temp\boot.exe".to_string()
         ]));
+    }
+
+    #[test]
+    fn autostart_severity_keeps_transit_high_and_per_user_quiet() {
+        // An unsigned command in a transit directory is the one case that earns High
+        // on a single signal.
+        assert_eq!(
+            autostart_severity(Some(false), r"C:\Users\bob\AppData\Local\Temp\setup.exe"),
+            Some(Severity::High)
+        );
+        // A per-user install is where software legitimately lands (chocolatey, scoop,
+        // PowerToys): informational at most, never High.
+        assert_eq!(
+            autostart_severity(
+                Some(false),
+                r"C:\Users\bob\AppData\Local\Programs\App\app.exe"
+            ),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            autostart_severity(None, r"C:\Users\bob\AppData\Local\Programs\App\app.exe"),
+            None
+        );
+        // A signed Program Files entry is normal software; an unsigned one is a note.
+        assert_eq!(
+            autostart_severity(Some(true), r"C:\Program Files\App\app.exe"),
+            None
+        );
+        // Unsigned in a privileged directory is information, not a warning: an
+        // in-house tool, an msys64 tree and a game all look like this.
+        assert_eq!(
+            autostart_severity(Some(false), r"C:\Program Files\App\app.exe"),
+            Some(Severity::Info)
+        );
     }
 }

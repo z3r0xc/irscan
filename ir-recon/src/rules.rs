@@ -97,8 +97,7 @@ pub fn classify_location(path: &str) -> Location {
 
     // Drop is checked first: `%LOCALAPPDATA%\Temp` matches both lists, and the more
     // specific answer is the honest one.
-    if DROP_MARKERS.iter().any(|m| lower.ends_with(&m[..m.len() - 1]) == false && lower.contains(m))
-    {
+    if DROP_MARKERS.iter().any(|m| lower.contains(m)) {
         return Location::Drop;
     }
     if APPDATA_MARKERS.iter().any(|m| lower.contains(m)) {
@@ -156,9 +155,13 @@ pub fn execution_severity(trusted: Option<bool>, location: Location) -> Option<S
         (Location::AppData, Some(false)) => Some(Severity::Info),
         (Location::AppData, _) => None,
 
-        // Unsigned in a privileged location is mildly notable: it happens with
-        // in-house and open-source software.
-        (Location::Privileged, Some(false)) => Some(Severity::Med),
+        // Unsigned in a privileged location is common and not actionable: an msys64
+        // tree, an in-house tool and a game installed under Program Files all look
+        // like this. It stays in the report as information - an earlier version called
+        // it MEDIUM and produced 42 of them on a clean developer machine - because
+        // "unsigned" alone is not evidence, and a reader who learns to skip a MEDIUM
+        // section will skip a real one.
+        (Location::Privileged, Some(false)) => Some(Severity::Info),
         (Location::Privileged, _) => None,
     }
 }
@@ -178,13 +181,13 @@ pub fn connection_severity(
     location: Location,
     owner_known: bool,
 ) -> Option<Severity> {
-    if public == false {
+    if !public {
         return None;
     }
     if location == Location::Drop {
         return Some(Severity::High);
     }
-    if owner_known == false {
+    if !owner_known {
         return Some(Severity::Med);
     }
     None
@@ -338,8 +341,14 @@ mod tests {
             classify_location(r"C:\Users\bob\AppData\Local\Temp\x.exe"),
             Location::Drop
         );
-        assert_eq!(classify_location(r"C:\Windows\Temp\svc.exe"), Location::Drop);
-        assert_eq!(classify_location("c:/users/bob/downloads/payload.exe"), Location::Drop);
+        assert_eq!(
+            classify_location(r"C:\Windows\Temp\svc.exe"),
+            Location::Drop
+        );
+        assert_eq!(
+            classify_location("c:/users/bob/downloads/payload.exe"),
+            Location::Drop
+        );
         assert_eq!(classify_location(r"C:\Users\Public\a.exe"), Location::Drop);
         // More specific than AppData: LocalAppData\Temp is both, and Drop wins.
         assert_eq!(
@@ -406,10 +415,10 @@ mod tests {
         );
         assert_eq!(execution_severity(Some(true), Location::AppData), None);
         assert_eq!(execution_severity(None, Location::AppData), None);
-        // Privileged: unsigned only.
+        // Privileged: unsigned is information, not a warning.
         assert_eq!(
             execution_severity(Some(false), Location::Privileged),
-            Some(Severity::Med)
+            Some(Severity::Info)
         );
         assert_eq!(execution_severity(Some(true), Location::Privileged), None);
     }

@@ -156,8 +156,14 @@ fn load_rule_sources(extra: &[PathBuf], warnings: &mut Vec<String>) -> Vec<(Stri
 }
 
 /// Collect the files worth scanning from what the other collectors already found.
+///
+/// The running executable is excluded. A scanner must not report itself: this binary
+/// contains the very strings the bundled rules look for (a rule that matches
+/// `HiddenDesktop` matches the code that hunts for it), so a self-match would sit at
+/// the top of every report as a permanent false positive.
 fn targets(ctx: &ScanContext) -> Vec<PathBuf> {
     let mut set: BTreeSet<PathBuf> = BTreeSet::new();
+    let own_image = std::env::current_exe().ok();
 
     for record in ctx.processes.values() {
         if let Some(path) = &record.path {
@@ -182,6 +188,7 @@ fn targets(ctx: &ScanContext) -> Vec<PathBuf> {
 
     set.into_iter()
         .filter(|p| is_scannable_path(&p.to_string_lossy()))
+        .filter(|p| own_image.as_deref() != Some(p.as_path()))
         .take(MAX_FILES)
         .collect()
 }
@@ -452,5 +459,31 @@ mod tests {
         // Empty context: nothing to scan, and no panic.
         let ctx = ScanContext::default();
         assert!(targets(&ctx).is_empty());
+    }
+
+    #[test]
+    fn the_scanner_never_targets_its_own_image() {
+        // The binary contains the strings the rules match, so scanning itself would
+        // produce two permanent HIGH findings in every report.
+        let own = std::env::current_exe().unwrap_or_default();
+        let mut ctx = ScanContext::default();
+        ctx.processes.insert(
+            1,
+            crate::model::ProcessRecord {
+                pid: 1,
+                ppid: 0,
+                name: "irscan.exe".to_string(),
+                path: Some(own.clone()),
+                cmdline: String::new(),
+                owner: String::new(),
+                started: None,
+                signature_trusted: None,
+                company: None,
+            },
+        );
+        assert!(
+            !targets(&ctx).contains(&own),
+            "the running executable must be excluded from the scan"
+        );
     }
 }

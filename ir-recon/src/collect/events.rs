@@ -567,11 +567,25 @@ fn collect_channel(
     Some(parsed)
 }
 
+/// Severity for the `ImagePath` a 7045 event recorded.
+///
+/// The shared location policy is the base. The one deliberate escalation is a transit
+/// directory, which stays High even when the file is already gone and its signature
+/// cannot be checked: the event log is then the only surviving record of the install,
+/// which is exactly what it is read for.
+fn service_install_severity(trusted: Option<bool>, image: &str) -> Option<Severity> {
+    let location = crate::rules::classify_location(image);
+    if location == crate::rules::Location::Drop {
+        return Some(Severity::High);
+    }
+    crate::rules::execution_severity(trusted, location)
+}
+
 /// FR-10: service installed via the Service Control Manager (Event 7045).
 ///
 /// The SCM writes this event immediately before the service starts, so it survives
 /// the service being removed afterwards - the single best record of "how did this
-/// thing get here". A user-writable `ImagePath` is the headline case.
+/// thing get here". An `ImagePath` in a transit directory is the headline case.
 fn service_install(ctx: &mut ScanContext) {
     let xpath = "*[System[EventID=7045]]";
     let Some(events) = collect_channel(
@@ -615,10 +629,7 @@ fn service_install(ctx: &mut ScanContext) {
         } else {
             crate::win::sig::is_signature_trusted(Path::new(&safe_image))
         };
-        let severity = match crate::rules::execution_severity(
-            trusted,
-            crate::rules::is_user_writable(&safe_image),
-        ) {
+        let severity = match service_install_severity(trusted, &safe_image) {
             Some(s) => s,
             None => continue,
         };
@@ -1278,6 +1289,40 @@ mod tests {
         // The Data element's Name attribute is the key; the unquoted `Service=x`
         // attribute must not have swallowed it.
         assert_eq!(field(&fields, "Svc"), Some(""));
+    }
+
+    #[test]
+    fn service_install_severity_keeps_a_transit_image_high() {
+        // The service file is usually gone by the time the log is read, so the
+        // signature is often unknown (None); the location must still hold it at High.
+        assert_eq!(
+            service_install_severity(
+                None,
+                r"C:\Users\bob\AppData\Local\Temp\a&b\agent.exe -k netsvcs"
+            ),
+            Some(Severity::High)
+        );
+        // Per-user application data is where software legitimately installs: not High
+        // on the path alone, whether or not the signature is known.
+        assert_eq!(
+            service_install_severity(Some(false), r"C:\ProgramData\Acme\agent.exe"),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            service_install_severity(None, r"C:\ProgramData\Acme\agent.exe"),
+            None
+        );
+        // A signed service in a protected directory is not a finding at all; an
+        // unsigned one is information, never High. The location is what carries the
+        // severity - only a transit directory escalates.
+        assert_eq!(
+            service_install_severity(Some(true), r"C:\Program Files\Acme\svc.exe"),
+            None
+        );
+        assert_eq!(
+            service_install_severity(Some(false), r"C:\Program Files\Acme\svc.exe"),
+            Some(Severity::Info)
+        );
     }
 
     #[test]

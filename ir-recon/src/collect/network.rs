@@ -8,24 +8,29 @@
 //! to the process table the process collector populated (which is why `processes`
 //! runs first in the fixed collector order).
 //!
-//! Three rules, all deliberately narrow:
+//! Two rules, both delegated to [`crate::rules`]:
 //!
-//! * an **established connection to a public address whose owner is weakly
-//!   provenance'd** - the binary lives somewhere a standard user can write, or is
-//!   unsigned, or the process has already exited (a socket outliving its owner is
-//!   itself evidence);
+//! * a **public connection whose owner lives in a transit directory** (`Location::Drop`)
+//!   or whose owner is gone entirely - see [`crate::rules::connection_severity`];
 //! * a **listener on a distinctive remote-control port**, which means this machine
-//!   accepts inbound remote sessions;
-//! * a **public connection to a privileged port from a user-writable binary**,
-//!   which is the shape of an agent reaching a C2 on a well-known port.
+//!   accepts inbound remote sessions. Deduplicated per `(pid, port)`: the table holds
+//!   one row per bound address, and every one of them is the same listener.
+//!
+//! An earlier version also flagged every public connection from a binary in `%APPDATA%`
+//! or `%LOCALAPPDATA%`, and every public connection to a privileged port from such a
+//! binary. On a clean developer machine that produced 113 findings - Telegram, a
+//! torrent client, the agent harness itself - because per-user software *installs*
+//! there. The location policy now lives in `rules`; it lives nowhere else.
 //!
 //! Both tables are read once and recorded in full: absence of findings is not
 //! absence of connections, and the raw appendix is what lets a human check the
 //! negative. Nothing here opens a socket, resolves a name or sends a packet.
 
+use std::collections::HashSet;
+
 use crate::collect::{CollectError, Collector};
 use crate::model::{ConnectionRecord, Finding, HaystackKind, ScanContext, Severity};
-use crate::rules::{is_private_ip, is_user_writable, port_label};
+use crate::rules::{classify_location, connection_severity, is_private_ip, port_label, Location};
 use crate::text::sanitize;
 use crate::win::net::{tcp_connections, udp_endpoints};
 
@@ -33,11 +38,6 @@ use crate::win::net::{tcp_connections, udp_endpoints};
 /// the second, cheaper bound so a hostile host cannot make the classify loop the
 /// slowest part of the scan.
 pub const MAX_CLASSIFIED: usize = 65536;
-
-/// Ports at or below this are privileged on every operating system. An outbound
-/// connection to one from a writable binary is unusual enough to report: legitimate
-/// software almost always uses 443/80/8080 or a product-specific high port.
-pub const PRIVILEGED_PORT_MAX: u16 = 1024;
 
 /// Split an `address:port` endpoint into its two halves.
 ///
@@ -124,28 +124,25 @@ pub fn is_public_remote(remote: &str) -> bool {
     !is_private_ip(address)
 }
 
-/// Severity for one connection row.
+/// Severity for one connection row, from the owner's [`Location`] and whether the
+/// owner is still in the process table.
 ///
-/// `public` is "the remote end is on the public internet" and `suspicious_owner` is
-/// "the owning process is weakly provenance'd" (user-writable, unsigned, or gone).
-/// Both are required: a public connection from a signed binary in `System32` is
-/// ordinary software, and a local connection from a writable binary is ordinary IPC.
+/// The decision itself lives in [`crate::rules::connection_severity`]: a connection is
+/// a finding only when the owning binary sits in a transit directory (`Drop`, `High`)
+/// or the socket has outlived its owner (`Med`). A normal application talking to
+/// `:443` from `%LOCALAPPDATA%` produces **nothing** - that is per-user software
+/// doing its job, and flagging it is how a report becomes ignorable.
 ///
-/// The state gate is what separates a live session from an attempt: `ESTABLISHED`
-/// is `High`, a `SYN_SENT` from the same process is `Med`. Listener states return
-/// `None` because inbound listeners belong to the port rule, not this one.
-pub fn connection_severity(state: &str, public: bool, suspicious_owner: bool) -> Option<Severity> {
-    if !suspicious_owner || !public {
-        return None;
-    }
-    match state.to_ascii_uppercase().as_str() {
-        "ESTABLISHED" => Some(Severity::High),
-        "LISTEN" | "LISTENING" | "BOUND" => None,
-        // Anything else that is public and weakly owned gets a look: `win::net`
-        // renders unknown state codes as hex, and an unrecognised state is exactly
-        // when a human should read the row.
-        _ => Some(Severity::Med),
-    }
+/// No state gate: an owner in a transit directory is worth the same line whether the
+/// socket is `ESTABLISHED` or still `SYN-SENT`, and the state is printed in the
+/// evidence for the human to weigh. Suppressing the attempt would hide the beacon
+/// that only ever tries.
+pub fn connection_severity_for(
+    location: Location,
+    owner_known: bool,
+    public: bool,
+) -> Option<Severity> {
+    connection_severity(public, location, owner_known)
 }
 
 /// One stable, readable line per endpoint for the RAW DATA appendix.
@@ -190,24 +187,23 @@ fn owner_lines(ctx: &ScanContext, pid: u32) -> (String, String) {
     (name, path)
 }
 
-/// Is this connection's owning process weakly provenance'd?
+/// Where the connection's owning process lives, and whether it is still there.
 ///
-/// A process absent from the table counts as suspicious: the socket survived its
-/// owner, which is how a short-lived beacon looks between runs, and it also means
-/// nothing about the binary was verified. A user-writable image path or an explicit
-/// untrusted signature counts for the same reasons the process collector reports
-/// them.
-fn suspicious_owner(ctx: &ScanContext, pid: u32) -> bool {
+/// A pid absent from the process table means the socket outlived its owner: the
+/// `owner_known` flag is `false` because that is the fact `rules` decides on, and the
+/// location is [`Location::Privileged`] because an absent process has no path to
+/// classify - inventing a suspicious one would turn a vanished process into a false
+/// HIGH instead of the MED the policy reserves for it.
+fn owner_location(ctx: &ScanContext, pid: u32) -> (Location, bool) {
     let Some(p) = ctx.processes.get(&pid) else {
-        return true;
+        return (Location::Privileged, false);
     };
-    if p.signature_trusted == Some(false) {
-        return true;
-    }
-    match p.path.as_deref().and_then(|v| v.to_str()) {
-        Some(path) => is_user_writable(path),
-        None => false,
-    }
+    let path = p
+        .path
+        .as_deref()
+        .map(|v| v.to_string_lossy().to_string())
+        .unwrap_or_default();
+    (classify_location(&path), true)
 }
 
 /// Enumerates TCP and UDP endpoints into the context and classifies them.
@@ -239,8 +235,21 @@ impl Collector for NetworkCollector {
             ));
         }
 
+        // One entry per listener the report has already described, so a dual-stack
+        // listener (4.0.0.0 plus [::] plus both loopbacks) is one finding. Keyed by
+        // (pid, port): the port is what the operator acts on, and the pid is what says
+        // it is the same process rather than a second one squatting the port.
+        let mut listener_seen: HashSet<(u32, u16)> = HashSet::new();
+
         for r in rows.into_iter().take(MAX_CLASSIFIED) {
-            let port = port_of(&r.remote);
+            // A listener's remote endpoint is the wildcard, so the labelled port is
+            // whichever end is a real port: the local one for a listener, the remote
+            // one for an outbound connection.
+            let port = if r.state.to_ascii_uppercase().contains("LISTEN") {
+                port_of(&r.local)
+            } else {
+                port_of(&r.remote)
+            };
             // A labelled port is worth recording as a haystack in its own right: it is
             // the one place the port number appears next to a human-readable product
             // class, and the report reads the port table from the same source.
@@ -252,7 +261,7 @@ impl Collector for NetworkCollector {
                 );
             }
 
-            classify(ctx, &r);
+            classify(ctx, &r, &mut listener_seen);
             table.push(describe(&r));
             ctx.connections.push(r);
         }
@@ -265,24 +274,38 @@ impl Collector for NetworkCollector {
     }
 }
 
-/// Apply the FR-7 / FR-13 policy to one endpoint and push anything it warrants.
+/// Apply the connection policy to one endpoint and push anything it warrants.
 ///
-/// The three rules are independent rather than else-if: a listener on 3389 and a
-/// user-writable binary connecting to port 443 are different problems, and a rule
-/// ordering that suppressed one of them would hide half the picture.
-fn classify(ctx: &mut ScanContext, r: &ConnectionRecord) {
+/// The two rules are independent rather than else-if: a dropped binary phoning home
+/// and an RDP listener are different problems, and a rule ordering that suppressed one
+/// of them would hide half the picture.
+fn classify(ctx: &mut ScanContext, r: &ConnectionRecord, listener_seen: &mut HashSet<(u32, u16)>) {
     let (name, path) = owner_lines(ctx, r.pid);
-    let suspicious = suspicious_owner(ctx, r.pid);
-    let public = is_public_remote(&r.remote);
-    let port = port_of(&r.remote);
+    let (location, owner_known) = owner_location(ctx, r.pid);
+    let state = r.state.to_ascii_uppercase();
 
-    // Rule 1: a live connection to the public internet from a process we cannot
-    // vouch for. This is the finding the reported symptom is about.
-    if let Some(sev) = connection_severity(&r.state, public, suspicious) {
+    // Rule 1: a public connection either from a transit directory or with no owner
+    // left. Everything else - a browser or chat client in `%LOCALAPPDATA%` reaching
+    // :443 - is ordinary software and produces no line at all.
+    let public = is_public_remote(&r.remote);
+    if let Some(sev) = connection_severity_for(location, owner_known, public) {
         let state_label = if r.state.trim().is_empty() {
             "connection".to_string()
         } else {
-            r.state.to_uppercase()
+            state.clone()
+        };
+        // The two branches are worded apart because their evidence differs: a socket
+        // whose owner is gone cannot show an image path, and printing an empty one
+        // would read like a lookup failure rather than the finding it is.
+        let reason = match (location, owner_known) {
+            (Location::Drop, _) => format!(
+                "the owning binary runs from a transit directory ({path}), which is where a \
+                 dropped payload lives - nothing legitimate installs there"
+            ),
+            (_, false) => "no process in the table owns this socket: it outlived whatever \
+                           opened it, so nothing about the peer was ever verified"
+                .to_string(),
+            _ => format!("the owning binary runs from {path}"),
         };
         ctx.add(
             Finding::new(
@@ -299,10 +322,7 @@ fn classify(ctx: &mut ScanContext, r: &ConnectionRecord) {
             .evidence(format!("state: {}", r.state))
             .evidence(format!("owning process: {name} (pid {})", r.pid))
             .evidence(format!("image path: {path}"))
-            .evidence(
-                "the owning process is weakly provenance'd: it runs from a user-writable path, \
-                 is unsigned, or has already exited while its socket survived",
-            )
+            .evidence(reason)
             .remediation(
                 "Identify the remote address and port before closing anything; a live upload \
                  session is the strongest evidence this scan can produce.",
@@ -316,15 +336,26 @@ fn classify(ctx: &mut ScanContext, r: &ConnectionRecord) {
 
     // Rule 2: a listener on a port only remote-control software uses. Med, not High:
     // an open port means the machine *accepts* remote sessions, which is a
-    // configuration fact, not proof that a session happened.
-    if r.state.to_ascii_uppercase().contains("LISTEN") {
-        if let Some(label) = port_label(port) {
+    // configuration fact, not proof that a session happened. The caller passes
+    // `listener_seen` so the finding fires once per (pid, port): the table holds one
+    // row per bound address, and four rows for a dual-stack listener are one listener.
+    if state.contains("LISTEN") {
+        // The *local* port: a listener's remote endpoint is the wildcard `0.0.0.0:0`,
+        // so reading the remote port here would label nothing. This is the port the
+        // machine accepts sessions on.
+        let listen_port = port_of(&r.local);
+        if let Some(label) = port_label(listen_port) {
+            let key = (r.pid, listen_port);
+            if listener_seen.contains(&key) {
+                return;
+            }
+            listener_seen.insert(key);
             ctx.add(
                 Finding::new(
                     Severity::Med,
                     "network",
                     format!(
-                        "{label} is listening on port {port} (pid {}, {name})",
+                        "{label} is listening on port {listen_port} (pid {}, {name})",
                         r.pid
                     ),
                 )
@@ -333,50 +364,11 @@ fn classify(ctx: &mut ScanContext, r: &ConnectionRecord) {
                 .evidence(format!("owning process: {name} (pid {})", r.pid))
                 .evidence(format!("image path: {path}"))
                 .evidence(format!(
-                    "port {port} is labelled {label} by the port table this scan uses"
+                    "port {listen_port} is labelled {label} by the port table this scan uses"
                 ))
                 .remediation(
                     "If you did not install this product, close the port and remove the software: \
                      an open remote-control port is an inbound path into this machine.",
-                ),
-            );
-        }
-    }
-
-    // Rule 3: a public destination on a privileged port, reached from a binary a
-    // standard user can replace. Reported in addition to rule 1 because the port is
-    // what a reader scans for: a C2 on 443 blends into HTTPS traffic, one on 22 or 53
-    // does not.
-    if public && port > 0 && port <= PRIVILEGED_PORT_MAX && suspicious {
-        let user_writable = ctx
-            .processes
-            .get(&r.pid)
-            .and_then(|p| p.path.as_deref())
-            .and_then(|v| v.to_str())
-            .map(is_user_writable)
-            .unwrap_or(false);
-        if user_writable {
-            ctx.add(
-                Finding::new(
-                    Severity::High,
-                    "network",
-                    format!(
-                        "{} (pid {}) from a user-writable location connects to privileged port \
-                         {port} at {}",
-                        name, r.pid, r.remote
-                    ),
-                )
-                .evidence(format!("remote endpoint: {}", r.remote))
-                .evidence(format!(
-                    "port: {port} (privileged range 1-{PRIVILEGED_PORT_MAX})"
-                ))
-                .evidence(format!("state: {}", r.state))
-                .evidence(format!("owning process: {name} (pid {})", r.pid))
-                .evidence(format!("image path: {path}"))
-                .remediation(
-                    "A user-writable binary talking to a privileged remote port is not normal \
-                     software behaviour; capture the process image and its hash, and treat the \
-                     host as compromised.",
                 ),
             );
         }
@@ -387,6 +379,7 @@ fn classify(ctx: &mut ScanContext, r: &ConnectionRecord) {
 mod tests {
     use super::*;
     use crate::model::ProcessRecord;
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
     fn proc(pid: u32, name: &str, path: &str, trusted: Option<bool>) -> ProcessRecord {
@@ -471,33 +464,167 @@ mod tests {
     }
 
     #[test]
-    fn connection_severity_branches() {
+    fn a_normal_appdata_connection_is_not_a_finding() {
+        // The acceptance test for this file: Telegram, a torrent client, a browser and
+        // the agent harness all live in %LOCALAPPDATA% or %APPDATA% and all talk to
+        // :443. Under the old policy each one produced HIGH. Under the policy that
+        // lives in `rules`, they produce nothing.
+        for path in [
+            r"C:\Users\bob\AppData\Local\Telegram Desktop\Telegram.exe",
+            r"C:\Users\bob\AppData\Local\Programs\qBittorrent\qbittorrent.exe",
+            r"C:\Users\bob\AppData\Roaming\omp\omp.exe",
+            r"C:\ProgramData\chocolatey\tools\7z.exe",
+        ] {
+            let mut ctx = ScanContext::default();
+            ctx.processes.insert(5, proc(5, "app.exe", path, None));
+            assert_eq!(
+                owner_location(&ctx, 5).0,
+                Location::AppData,
+                "precondition: {path} is AppData"
+            );
+            assert_eq!(
+                connection_severity_for(Location::AppData, true, true),
+                None,
+                "a public :443 connection from {path} must produce no finding"
+            );
+        }
+    }
+
+    #[test]
+    fn a_drop_location_owner_is_high_and_an_absent_owner_is_med() {
+        // A binary in a transit directory is the one location that earns HIGH on the
+        // connection rule alone: nothing legitimate installs into %TEMP%.
+        let mut ctx = ScanContext::default();
+        ctx.processes.insert(
+            9,
+            proc(
+                9,
+                "dropper.exe",
+                r"C:\Users\bob\AppData\Local\Temp\dropper.exe",
+                None,
+            ),
+        );
+        assert_eq!(owner_location(&ctx, 9).0, Location::Drop);
         assert_eq!(
-            connection_severity("ESTABLISHED", true, true),
+            connection_severity_for(Location::Drop, true, true),
             Some(Severity::High)
         );
-        // Public but the owner is trustworthy: nothing to report.
-        assert_eq!(connection_severity("ESTABLISHED", true, false), None);
-        // Suspicious owner but the peer is local: nothing to report.
-        assert_eq!(connection_severity("ESTABLISHED", false, true), None);
-        // A listener is the port rule's job, not this one.
-        assert_eq!(connection_severity("LISTENING", true, true), None);
-        assert_eq!(connection_severity("BOUND", true, true), None);
-        // A public attempt from a weakly provenance'd process is Med, not High.
+
+        // An absent owner is MED: the socket outlived its process, so nothing about the
+        // peer was verified - but an exited process is not by itself proof of a drop.
+        let (loc, known) = owner_location(&ctx, 999);
+        // Asserted as a pair: the toolchain corrupts a leading `!` in this file, and
+        // clippy rejects both `== false` forms.
+        assert_eq!((loc, known), (Location::Privileged, false));
+        assert_eq!(loc, Location::Privileged);
         assert_eq!(
-            connection_severity("SYN_SENT", true, true),
+            connection_severity_for(loc, known, true),
             Some(Severity::Med)
         );
-        // An unrecognised state code is not silently dropped when the peer is public.
+
+        // Public is required: a local connection from a transit directory is ordinary
+        // IPC and must stay silent.
+        assert_eq!(connection_severity_for(Location::Drop, true, false), None);
+        // A privileged owner that is present is ordinary software.
         assert_eq!(
-            connection_severity("0x1234", true, true),
-            Some(Severity::Med)
+            connection_severity_for(Location::Privileged, true, true),
+            None
         );
-        // State comparison ignores case.
+    }
+
+    #[test]
+    fn classify_keeps_raw_rows_but_reports_only_the_policy_cases() {
+        // A public :443 session held by a normal AppData app: raw data yes, finding no.
+        let mut ctx = ScanContext::default();
+        ctx.processes.insert(
+            11,
+            proc(
+                11,
+                "Telegram.exe",
+                r"C:\Users\bob\AppData\Local\Telegram Desktop\Telegram.exe",
+                None,
+            ),
+        );
+        let mut seen = HashSet::new();
+        classify(
+            &mut ctx,
+            &conn("TCP", "149.154.167.51:443", "ESTABLISHED", 11),
+            &mut seen,
+        );
+        assert!(
+            ctx.findings.is_empty(),
+            "a normal AppData app talking to :443 must not be reported: {:?}",
+            ctx.findings
+        );
+
+        // The same connection from %TEMP% is HIGH.
+        let mut ctx = ScanContext::default();
+        ctx.processes
+            .insert(12, proc(12, "x.exe", r"C:\Windows\Temp\x.exe", Some(true)));
+        let mut seen = HashSet::new();
+        classify(
+            &mut ctx,
+            &conn("TCP", "8.8.8.8:443", "ESTABLISHED", 12),
+            &mut seen,
+        );
+        assert_eq!(ctx.findings.len(), 1);
+        assert_eq!(ctx.findings[0].severity, Severity::High);
+
+        // An owner that is gone gets MED, not HIGH.
+        let mut ctx = ScanContext::default();
+        let mut seen = HashSet::new();
+        classify(
+            &mut ctx,
+            &conn("TCP", "8.8.8.8:443", "ESTABLISHED", 4242),
+            &mut seen,
+        );
+        assert_eq!(ctx.findings.len(), 1);
+        assert_eq!(ctx.findings[0].severity, Severity::Med);
+    }
+
+    #[test]
+    fn a_labelled_listener_is_reported_once_per_pid_and_port() {
+        // A dual-stack listener binds four addresses and the table returns four rows;
+        // the operator has one RDP listener to deal with, not four.
+        let mut ctx = ScanContext::default();
+        ctx.processes.insert(
+            21,
+            proc(
+                21,
+                "svchost.exe",
+                r"C:\Windows\System32\svchost.exe",
+                Some(true),
+            ),
+        );
+        let mut seen = HashSet::new();
+        for local in ["0.0.0.0:3389", "[::]:3389", "127.0.0.1:3389", "[::1]:3389"] {
+            let mut r = conn("TCP", "0.0.0.0:0", "LISTENING", 21);
+            r.local = local.to_string();
+            classify(&mut ctx, &r, &mut seen);
+        }
         assert_eq!(
-            connection_severity("established", true, true),
-            Some(Severity::High)
+            ctx.findings.len(),
+            1,
+            "one finding per (pid, port), got {:?}",
+            ctx.findings
         );
+        assert_eq!(ctx.findings[0].severity, Severity::Med);
+        assert!(ctx.findings[0].title.contains("3389"));
+
+        // A different port on the same pid is a different listener.
+        let mut r = conn("TCP", "0.0.0.0:0", "LISTENING", 21);
+        r.local = "0.0.0.0:5900".to_string();
+        classify(&mut ctx, &r, &mut seen);
+        assert_eq!(ctx.findings.len(), 2);
+
+        // A port with no label is silent even from a transit directory: the listener
+        // rule is about the port, not the location.
+        let mut ctx = ScanContext::default();
+        let mut seen = HashSet::new();
+        let mut r = conn("TCP", "0.0.0.0:0", "LISTENING", 5);
+        r.local = "0.0.0.0:12345".to_string();
+        classify(&mut ctx, &r, &mut seen);
+        assert!(ctx.findings.is_empty(), "{:?}", ctx.findings);
     }
 
     #[test]
@@ -525,11 +652,11 @@ mod tests {
     }
 
     #[test]
-    fn suspicious_owner_treats_a_missing_process_as_suspicious() {
+    fn owner_location_classifies_the_owning_process_path() {
         let mut ctx = ScanContext::default();
-        // Absent from the table: a socket that outlived its owner.
-        assert!(suspicious_owner(&ctx, 42));
-        // Present, signed, in a protected location: not suspicious.
+        // Absent from the table: unknown owner, no path to classify.
+        assert_eq!(owner_location(&ctx, 42), (Location::Privileged, false));
+        // A protected install is Privileged and known.
         ctx.processes.insert(
             1,
             proc(
@@ -539,24 +666,22 @@ mod tests {
                 Some(true),
             ),
         );
-        assert!(!suspicious_owner(&ctx, 1));
-        // Same kind of path, but the signature did not verify.
-        ctx.processes.insert(
-            2,
-            proc(2, "x.exe", r"C:\Windows\System32\x.exe", Some(false)),
-        );
-        assert!(suspicious_owner(&ctx, 2));
-        // User-writable path, verification never attempted.
+        assert_eq!(owner_location(&ctx, 1), (Location::Privileged, true));
+        // A per-user install is AppData: not evidence, so the policy is silent on it.
         ctx.processes.insert(
             3,
-            proc(3, "y.exe", r"C:\Users\bob\AppData\Local\Temp\y.exe", None),
+            proc(3, "y.exe", r"C:\Users\bob\AppData\Local\Acme\y.exe", None),
         );
-        assert!(suspicious_owner(&ctx, 3));
-        // No path at all and no failed signature: nothing says it is suspicious.
-        let mut bare = proc(4, "z.exe", r"C:\Windows\z.exe", None);
+        assert_eq!(owner_location(&ctx, 3), (Location::AppData, true));
+        // A transit directory is Drop.
+        ctx.processes
+            .insert(4, proc(4, "z.exe", r"C:\Users\bob\Downloads\z.exe", None));
+        assert_eq!(owner_location(&ctx, 4), (Location::Drop, true));
+        // No path at all: nothing to classify, and the process is still known.
+        let mut bare = proc(5, "w.exe", r"C:\Windows\w.exe", None);
         bare.path = None;
-        ctx.processes.insert(4, bare);
-        assert!(!suspicious_owner(&ctx, 4));
+        ctx.processes.insert(5, bare);
+        assert_eq!(owner_location(&ctx, 5), (Location::Privileged, true));
     }
 
     #[test]

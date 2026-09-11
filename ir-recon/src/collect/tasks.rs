@@ -12,6 +12,7 @@
 //! allocating or recursing. All scanning is bounded by the input string itself, so
 //! a hostile file cannot stall the scan.
 
+use std::ops::Not;
 use std::path::{Path, PathBuf};
 
 use crate::collect::{CollectError, Collector};
@@ -24,10 +25,6 @@ pub const MAX_TASK_DEPTH: usize = 8;
 pub const MAX_TASKS: usize = 8000;
 /// Largest file still considered a task definition; real ones are a few KiB.
 pub const MAX_TASK_XML_BYTES: u64 = 256 * 1024;
-
-/// Action directories malware uses to drop payloads (FR-13). A scheduled task that
-/// runs from here is worth a High finding even when the binary is not obviously bad.
-const SUSPICIOUS_ACTION_MARKERS: &[&str] = &["\\temp\\", "\\appdata\\", "\\programdata\\"];
 
 /// Extensions that mean "this action runs a program", used to find the end of an
 /// unquoted executable path.
@@ -200,12 +197,6 @@ pub fn task_action_executable(action: &str) -> Option<String> {
     // Nothing looked like a program; return the leading token so a bare command
     // name is still classified rather than silently dropped.
     trimmed.split_whitespace().next().map(str::to_string)
-}
-
-/// Does this task action run from a temporary or per-user data directory?
-pub fn action_is_suspicious(action: &str) -> bool {
-    let lower = action.replace('/', "\\").to_ascii_lowercase();
-    SUSPICIOUS_ACTION_MARKERS.iter().any(|m| lower.contains(m))
 }
 
 /// A fully qualified drive path (`C:\...`).
@@ -491,6 +482,39 @@ pub fn decode_task_xml(bytes: &[u8]) -> String {
     }
 }
 
+/// Severity for one task action, from its location and signature.
+///
+/// The shared location policy is the base, with one deliberate escalation: an action
+/// in a transit directory stays High even when the file is gone or its signature looks
+/// valid. The task is what re-runs a dropped payload, and `%TEMP%`, `Downloads` and
+/// `Users\Public` are directories nothing installs to. `trusted` is `None` when the
+/// file is absent and the signature check cannot run.
+fn task_action_severity(trusted: Option<bool>, exe: &str) -> Option<Severity> {
+    let location = crate::rules::classify_location(exe);
+    if location == crate::rules::Location::Drop {
+        return Some(Severity::High);
+    }
+    crate::rules::execution_severity(trusted, location)
+}
+
+/// Is this a fully qualified drive path whose file is gone?
+///
+/// Only then does "the payload was deleted" mean anything: a path that still contains
+/// an unexpanded `%VAR%`, or a bare file name, has not been resolved yet and must not
+/// be reported as a deleted payload.
+fn missing_drive_payload(exe: &str) -> bool {
+    if is_drive_path(exe) {
+        match Path::new(exe).try_exists() {
+            Ok(present) => present.not(),
+            // Unreadable (permissions, a disconnected drive): report nothing, because
+            // "cannot tell" must not be presented as "deleted".
+            Err(_) => false,
+        }
+    } else {
+        false
+    }
+}
+
 /// Decide the single finding (if any) a task deserves, strongest condition first.
 fn classify_task(record: &TaskRecord) -> Option<Finding> {
     let exe = task_action_executable(&record.action).unwrap_or_default();
@@ -499,8 +523,9 @@ fn classify_task(record: &TaskRecord) -> Option<Finding> {
     let safe_action = sanitize(&crate::win::expand(&record.action), MAX_STRING);
 
     // Most decisive first: the persistence entry outliving its payload is the
-    // shape of an agent that deleted itself after use.
-    if is_drive_path(&exe_expanded) && !Path::new(&exe_expanded).exists() {
+    // shape of an agent that deleted itself after use. Only a fully qualified drive
+    // path is checked; an unexpanded `%VAR%` has not been resolved yet.
+    if missing_drive_payload(&exe_expanded) {
         return Some(
             Finding::new(
                 Severity::High,
@@ -518,37 +543,31 @@ fn classify_task(record: &TaskRecord) -> Option<Finding> {
         );
     }
 
-    if action_is_suspicious(&crate::win::expand(&record.action)) {
+    // The location - and the signature, when there is a file to check - decide,
+    // through the shared policy. A task pointing at a path that is gone because it
+    // deleted itself is still classified for its location, with the signature unknown.
+    let location = crate::rules::classify_location(&safe_exe);
+    let trusted = if Path::new(&safe_exe).is_file() {
+        crate::win::sig::is_signature_trusted(Path::new(&safe_exe))
+    } else {
+        None
+    };
+    if let Some(severity) = task_action_severity(trusted, &safe_exe) {
+        let title = match location {
+            crate::rules::Location::Drop => "Scheduled task runs from a transit directory",
+            crate::rules::Location::AppData => "Scheduled task runs from a per-user data directory",
+            crate::rules::Location::Privileged => "Scheduled task runs an unsigned executable",
+        };
         return Some(
-            Finding::new(
-                Severity::High,
-                "scheduled-task",
-                "Scheduled task runs from %TEMP%, AppData or ProgramData",
-            )
-            .evidence(format!("task: {}", record.name))
-            .evidence(format!("action: {safe_action}"))
-            .remediation(
-                "Legitimate software installs into Program Files; per-user data directories \
-                 are where dropped payloads live.",
-            )
-            .remediation("Inspect the file and the task's author before deleting the task."),
-        );
-    }
-
-    if crate::rules::is_user_writable(&safe_exe) {
-        return Some(
-            Finding::new(
-                Severity::High,
-                "scheduled-task",
-                "Scheduled task executes from a user-writable location",
-            )
-            .evidence(format!("task: {}", record.name))
-            .evidence(format!("image: {safe_exe}"))
-            .remediation(
-                "A task that runs an executable from a user-writable directory can be \
-                 replaced by any process running as that user (FR-13).",
-            )
-            .remediation("Verify the file's signature and publisher before trusting the task."),
+            Finding::new(severity, "scheduled-task", title)
+                .evidence(format!("task: {}", record.name))
+                .evidence(format!("action: {safe_action}"))
+                .evidence(format!("image: {safe_exe}"))
+                .remediation(
+                    "A task that runs a payload from a transit or user-writable directory \
+                     can be replaced by any process running as that user (FR-13).",
+                )
+                .remediation("Verify the file's signature and publisher before trusting the task."),
         );
     }
 
@@ -699,17 +718,83 @@ mod tests {
     }
 
     #[test]
-    fn suspicious_action_locations_are_flagged() {
-        assert!(action_is_suspicious(
-            r"C:\Users\bob\AppData\Local\Temp\a.exe"
-        ));
-        assert!(action_is_suspicious(r"C:\ProgramData\Acme\a.exe"));
-        assert!(!action_is_suspicious(r"C:\Program Files\Vendor\svc.exe"));
-        // An unexpanded %TEMP% is not a path yet and must not be assumed.
-        assert!(!action_is_suspicious(r"%TEMP%\a.exe"));
+    fn drive_path_recognition() {
         assert!(is_drive_path(r"C:\a.exe"));
         assert!(!is_drive_path(r"%TEMP%\a.exe"));
         assert!(!is_drive_path("a.exe"));
+    }
+
+    #[test]
+    fn task_action_severity_is_high_only_where_nothing_installs() {
+        // %TEMP%: the task is what re-runs the dropped payload, so it stays High even
+        // when the signature could not be checked.
+        assert_eq!(
+            task_action_severity(None, r"C:\Users\bob\AppData\Local\Temp\setup.exe"),
+            Some(Severity::High)
+        );
+        assert_eq!(
+            task_action_severity(Some(true), r"C:\Users\bob\AppData\Local\Temp\setup.exe"),
+            Some(Severity::High)
+        );
+        // A per-user install directory is where software legitimately lands.
+        assert_eq!(
+            task_action_severity(Some(false), r"C:\ProgramData\Acme\agent.exe"),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            task_action_severity(None, r"C:\ProgramData\Acme\agent.exe"),
+            None
+        );
+        // Program Files: an unsigned image is worth recording, but no more than that.
+        assert_eq!(
+            task_action_severity(Some(true), r"C:\Program Files\Vendor\svc.exe"),
+            None
+        );
+        assert_eq!(
+            task_action_severity(Some(false), r"C:\Program Files\Vendor\svc.exe"),
+            Some(Severity::Info)
+        );
+    }
+
+    #[test]
+    fn a_task_in_a_transit_directory_is_high_even_when_the_image_is_gone() {
+        // The file is absent, so no signature can be taken; the location alone must
+        // still carry the finding: %TEMP% is a directory nothing installs to.
+        let gone_in_temp = parse_task_xml(
+            "\\Cleanup",
+            "<Task><Actions><Exec><Command>%TEMP%\\t-9999\\agent.exe</Command>\
+             </Exec></Actions></Task>",
+        )
+        .expect("fixture must parse");
+        let temp = classify_task(&gone_in_temp).expect("a task in %TEMP% must be reported");
+        assert_eq!(temp.severity, Severity::High);
+    }
+
+    #[test]
+    fn a_task_running_from_application_data_is_not_high() {
+        // A present executable under AppData with no signature is at most INFO; a
+        // clean machine must not show a High just because per-user software lives
+        // there. See `task_action_severity` for the signed and absent combinations.
+        // through a path that is present: the report must not carry a High for a
+        // per-user install directory, only the Info that says "unsigned, look". The
+        // file is staged under %LOCALAPPDATA% (never %TEMP%, which is a transit
+        // directory and *is* worth a High).
+        let base = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let dir = Path::new(&base).join("irscan-policy-test");
+        let exe = dir.join("app.exe");
+        std::fs::create_dir_all(&dir).ok();
+        std::fs::write(&exe, b"stub").ok();
+        let appdata = parse_task_xml(
+            "\\Updater",
+            &format!(
+                "<Task><Actions><Exec><Command>{}</Command></Exec></Actions></Task>",
+                exe.display()
+            ),
+        )
+        .expect("fixture must parse");
+        let severity = classify_task(&appdata).map(|f| f.severity);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(severity, Some(Severity::Info));
     }
 
     #[test]

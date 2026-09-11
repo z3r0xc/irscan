@@ -23,7 +23,7 @@ use sysinfo::{System, Users};
 
 use crate::collect::{CollectError, Collector};
 use crate::model::{Finding, HaystackKind, ProcessRecord, ScanContext, Severity, MAX_STRING};
-use crate::rules::{execution_severity, is_user_writable, looks_masquerading};
+use crate::rules::{classify_location, execution_severity, looks_masquerading};
 use crate::text::sanitize;
 use crate::win::sig::{company_name, is_signature_trusted};
 
@@ -218,6 +218,10 @@ impl Collector for ProcessesCollector {
         let users = Users::new_with_refreshed_list();
         let system_root = crate::win::system_root();
         let now = now_secs();
+        // Whether this scan can read a protected process at all. An unreadable image
+        // path on a non-elevated scan is a privilege limit, not evidence; the same
+        // path on an *elevated* scan is the process actively withholding it.
+        let elevated = crate::win::is_elevated();
 
         // Sort by pid so an unchanged host produces a byte-identical RAW DATA
         // section; HashMap iteration order is not stable across runs.
@@ -238,6 +242,10 @@ impl Collector for ProcessesCollector {
 
         let mut table: Vec<String> = Vec::with_capacity(entries.len().min(MAX_PROCESSES));
         let mut owners_unresolved: usize = 0;
+        // Processes whose image path could not be read. Collected here so the whole
+        // set becomes ONE finding at the end rather than one finding per process -
+        // on a stock non-elevated host this is ~180 rows of the same observation.
+        let mut unreadable: Vec<Unreadable> = Vec::new();
 
         for process in entries.iter().take(MAX_PROCESSES) {
             let pid = process.pid().as_u32();
@@ -295,7 +303,7 @@ impl Collector for ProcessesCollector {
                 .and_then(|p| creation_secs(Path::new(p)));
             let recent = is_recently_created(created, now, RECENT_DAYS);
 
-            classify(
+            if let Some(entry) = classify(
                 ctx,
                 &record,
                 path.as_deref().unwrap_or(""),
@@ -303,11 +311,15 @@ impl Collector for ProcessesCollector {
                 &system_root,
                 recent,
                 created,
-            );
+            ) {
+                unreadable.push(entry);
+            }
 
             table.push(describe(&record));
             ctx.processes.insert(pid, record);
         }
+
+        report_unreadable_paths(ctx, &unreadable, elevated);
 
         if owners_unresolved > 0 {
             ctx.warn(format!(
@@ -318,6 +330,88 @@ impl Collector for ProcessesCollector {
         ctx.raw_section("PROCESSES", table);
         Ok(())
     }
+}
+
+/// One process whose image path could not be read.
+#[derive(Debug, Clone)]
+struct Unreadable {
+    pid: u32,
+    name: String,
+    owner: String,
+}
+
+/// Emit the single aggregated finding for unreadable image paths.
+///
+/// On a non-elevated scan an unreadable path is an artefact of privilege, so the
+/// finding is **Info** and says so in its own evidence. When the scan *is* elevated
+/// the process still refused to name its image, which is concealment rather than a
+/// permission limit, and it stays **Med** - the one case where this observation is
+/// worth an analyst's attention.
+fn report_unreadable_paths(ctx: &mut ScanContext, unreadable: &[Unreadable], elevated: bool) {
+    if unreadable.is_empty() {
+        return;
+    }
+    let count = unreadable.len();
+
+    // Distinct names, in order, so the evidence reads as a list of processes rather
+    // than a wall of pid rows. Bounded to keep the line readable.
+    let mut names: Vec<&str> = Vec::new();
+    for entry in unreadable {
+        let name = display_name(&entry.name);
+        if names.contains(&name) {
+            continue;
+        }
+        names.push(name);
+    }
+    let shown = names.len().min(20);
+    let mut name_list = names[..shown].join(", ");
+    if names.len() > shown {
+        name_list.push_str(&format!(", and {} more", names.len() - shown));
+    }
+
+    let (severity, title, note) = if elevated {
+        (
+            Severity::Med,
+            format!(
+                "{count} process image path(s) could not be read even though the scan is elevated"
+            ),
+            "The scan holds an administrator token and still cannot open these images, so the \
+             access denial is the image's own, not the token's.",
+        )
+    } else {
+        (
+            Severity::Info,
+            format!("{count} process image path(s) could not be read (scan was not elevated)"),
+            "This is a privilege limit, not a hiding attempt: protected and SYSTEM processes \
+             refuse their image path to a non-elevated reader. Re-run elevated to resolve it.",
+        )
+    };
+
+    let mut finding = Finding::new(severity, "process", title)
+        .evidence(format!("affected processes: {count}"))
+        .evidence(format!("names: {name_list}"))
+        .evidence(format!(
+            "owner: {}",
+            if unreadable[0].owner.is_empty() {
+                "<unknown>"
+            } else {
+                unreadable[0].owner.as_str()
+            }
+        ))
+        .evidence(format!("pid (first): {}", unreadable[0].pid))
+        .evidence(format!("scan elevated: {elevated}"))
+        .evidence(format!("note: {note}"))
+        .remediation(
+            "Re-run the scan elevated: most of these resolve to legitimate system images once \
+             the tool can read them.",
+        );
+    if elevated {
+        finding = finding.remediation(
+            "If the path stays hidden on an elevated scan, treat the image as suspect: a \
+             legitimate Windows binary does not deny its own path to an administrator.",
+        );
+    }
+    ctx.add(finding);
 }
 
 /// Apply the FR-13 / FR-14 policy to one process and push anything it warrants.
@@ -334,6 +428,11 @@ impl Collector for ProcessesCollector {
 /// masquerading would flag every core Windows process as a RAT and make the report
 /// worthless. Only a path that was actually read and lies outside `%SystemRoot%`
 /// is evidence of masquerading.
+///
+/// Returns the process's [`Unreadable`] entry when its path could not be read, for
+/// the caller to aggregate; everything else is pushed directly. Nothing but an
+/// aggregate is emitted for the unreadable case, because one finding per process
+/// turned 183 of them loose on a clean host.
 fn classify(
     ctx: &mut ScanContext,
     p: &ProcessRecord,
@@ -342,15 +441,22 @@ fn classify(
     system_root: &str,
     recent: bool,
     created: Option<u64>,
-) {
+) -> Option<Unreadable> {
     let trusted = p.signature_trusted;
-    let user_writable = is_user_writable(path);
+    // `Location`, not the coarse boolean: a binary in application data is where
+    // per-user software lives, so it must not carry the same weight as one in a
+    // transit directory. `rules::execution_severity` owns the resulting severity.
+    let location = classify_location(path);
+    let user_writable = location != crate::rules::Location::Privileged;
     let masquerading = path_observed && looks_masquerading(&p.name, path, system_root);
     let name_disp = display_name(&p.name);
 
     // FR-13: weak provenance. `rules::execution_severity` owns the base severity;
-    // the escalation below is the spec's "drop window" signal on top of it.
-    let escalated = trusted == Some(false) && user_writable && recent;
+    // the escalation below is the spec's "drop window" signal on top of it. It
+    // requires a *transit* directory: an unsigned binary that appeared last week
+    // under `%LOCALAPPDATA%` is a normal per-user install, and treating it as a drop
+    // produced 21 false Highs on a clean developer machine.
+    let escalated = trusted == Some(false) && location == crate::rules::Location::Drop && recent;
     // A *fresh, unsigned* image inside System32 is the classic hand-placed payload.
     // Freshness alone is not evidence: Windows Update rewrites System32 binaries on
     // every cumulative patch, so a legitimately signed `svchost.exe` with a recent
@@ -359,7 +465,7 @@ fn classify(
     // on a freshly patched host.
     let system32_recent = recent && is_under_system32(path, system_root) && trusted == Some(false);
 
-    let mut severity = execution_severity(trusted, user_writable);
+    let mut severity = execution_severity(trusted, location);
     if escalated || system32_recent {
         severity = Some(Severity::High);
     }
@@ -367,7 +473,7 @@ fn classify(
     if let Some(sev) = severity {
         let title = if escalated {
             format!(
-                "Process {} (pid {}) is unsigned and was created recently in a user-writable location",
+                "Process {} (pid {}) is unsigned and was created recently in a transit directory",
                 name_disp, p.pid
             )
         } else if system32_recent {
@@ -377,12 +483,12 @@ fn classify(
             )
         } else if user_writable && trusted == Some(false) {
             format!(
-                "Process {} (pid {}) is unsigned and runs from a user-writable location",
+                "Process {} (pid {}) is unsigned and runs from a per-user location",
                 name_disp, p.pid
             )
         } else if user_writable {
             format!(
-                "Process {} (pid {}) runs from a user-writable location",
+                "Process {} (pid {}) runs from a per-user location",
                 name_disp, p.pid
             )
         } else {
@@ -415,7 +521,8 @@ fn classify(
     }
 
     // FR-14: a system-binary name outside %SystemRoot%, or with the path hidden,
-    // has no legitimate use.
+    // has no legitimate use. Returns early so this process is not *also* counted as
+    // an unreadable path - the masquerade is the stronger, more specific statement.
     if masquerading {
         ctx.add(
             Finding::new(
@@ -447,50 +554,21 @@ fn classify(
                 "Capture the image and its hash before removal, then rebuild the host from external media.",
             ),
         );
+        return None;
     }
 
-    // An image path that could not be read cannot be verified either way. This is
-    // deliberately Med and deliberately worded as "could not be read": on a
-    // non-elevated scan this is simply the protected/system processes the scan has
-    // no right to inspect, so calling it concealment would be a false accusation.
-    // The kernel pseudo-processes have no image by design; masquerading names with a
-    // readable path are already reported above at High.
-    if !path_observed && !masquerading && !is_kernel_pseudo_process(&p.name) {
-        ctx.add(
-            Finding::new(
-                Severity::Med,
-                "process",
-                format!(
-                    "Process {} (pid {}) image path could not be read",
-                    name_disp, p.pid
-                ),
-            )
-            .evidence(format!("pid {} ({}) parent pid {}", p.pid, name_disp, p.ppid))
-            .evidence("image path: <could not be read>")
-            .evidence(format!(
-                "owner: {}",
-                if p.owner.is_empty() {
-                    "<unknown>"
-                } else {
-                    p.owner.as_str()
-                }
-            ))
-            .evidence(format!(
-                "command line: {}",
-                if p.cmdline.is_empty() {
-                    "<empty>"
-                } else {
-                    p.cmdline.as_str()
-                }
-            ))
-            .evidence(
-                "note: an unreadable path is usually a privilege limit, not a hiding attempt; re-run elevated before drawing conclusions.",
-            )
-            .remediation(
-                "Re-run the scan elevated: most of these resolve to legitimate system images once the tool can read them.",
-            ),
-        );
+    // An image path that could not be read cannot be verified either way, and is
+    // reported by the caller as ONE aggregate rather than one finding per process.
+    // The kernel pseudo-processes have no image by design and are excluded here.
+    let observed = path_observed || is_kernel_pseudo_process(&p.name);
+    if observed {
+        return None;
     }
+    Some(Unreadable {
+        pid: p.pid,
+        name: p.name.clone(),
+        owner: p.owner.clone(),
+    })
 }
 
 /// Account name that owns `uid`, resolved against the loaded user list.
@@ -791,7 +869,135 @@ mod tests {
         assert_eq!(trust_label(None), "signature not verified");
 
         // Paths that are pure noise must classify, not panic.
-        assert!(!is_user_writable(""));
+        assert!(!crate::rules::is_user_writable(""));
         assert!(!is_under_system32("\\\\?\\", ""));
+    }
+
+    /// The rule that generated 21 false Highs: an unsigned binary in application
+    /// data is a normal per-user install. Execution severity must key off
+    /// `Location`, not the coarse "is it user-writable" boolean.
+    #[test]
+    fn unsigned_binary_severity_follows_the_location_not_user_writability() {
+        // Six agents' worth of dev tooling on this very machine.
+        let appdata = r"C:\Users\bob\AppData\Local\uv\cache\archive\Scripts\a.exe";
+        let choco = r"C:\ProgramData\chocolatey\tools\a.exe";
+        let temp = r"C:\Users\bob\AppData\Local\Temp\a.exe";
+
+        let appdata_loc = classify_location(appdata);
+        let choco_loc = classify_location(choco);
+        let temp_loc = classify_location(temp);
+
+        // All three report as "user-writable", which is why the boolean was the bug.
+        assert!(crate::rules::is_user_writable(appdata));
+        assert!(crate::rules::is_user_writable(choco));
+        assert!(crate::rules::is_user_writable(temp));
+
+        // But only the transit directory is High.
+        assert_eq!(
+            execution_severity(Some(false), temp_loc),
+            Some(Severity::High)
+        );
+        // Application data is at most Info - never Med, never High.
+        assert_eq!(
+            execution_severity(Some(false), appdata_loc),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            execution_severity(Some(false), choco_loc),
+            Some(Severity::Info)
+        );
+        // Signed or unverifiable in application data is nothing at all.
+        assert_eq!(execution_severity(Some(true), appdata_loc), None);
+        assert_eq!(execution_severity(None, choco_loc), None);
+    }
+
+    /// The "drop window" escalation is only allowed in a transit directory. An
+    /// unsigned binary that appeared last week under %LOCALAPPDATA% must not be
+    /// promoted to High.
+    #[test]
+    fn recent_and_unsigned_only_escalates_in_a_transit_directory() {
+        let escalated = |path: &str, trusted: Option<bool>, recent: bool| {
+            trusted == Some(false)
+                && classify_location(path) == crate::rules::Location::Drop
+                && recent
+        };
+        assert!(escalated(
+            r"C:\Users\bob\AppData\Local\Temp\a.exe",
+            Some(false),
+            true
+        ));
+        assert!(!escalated(
+            r"C:\Users\bob\AppData\Local\omp\omp.exe",
+            Some(false),
+            true
+        ));
+        assert!(!escalated(
+            r"C:\ProgramData\chocolatey\tools\a.exe",
+            Some(false),
+            true
+        ));
+        // Not recent, not unsigned: no escalation either way.
+        assert!(!escalated(
+            r"C:\Users\bob\AppData\Local\Temp\a.exe",
+            Some(false),
+            false
+        ));
+        assert!(!escalated(
+            r"C:\Users\bob\AppData\Local\Temp\a.exe",
+            None,
+            true
+        ));
+    }
+
+    /// The 183-finding regression: many unreadable paths become ONE finding. On a
+    /// non-elevated scan that finding is Info, because a privilege limit is not
+    /// evidence; on an elevated scan concealment stays Med.
+    #[test]
+    fn unreadable_paths_are_one_aggregate_finding() {
+        let mut ctx = ScanContext::default();
+        let entries = vec![
+            Unreadable {
+                pid: 996,
+                name: "svchost.exe".into(),
+                owner: "SYSTEM".into(),
+            },
+            Unreadable {
+                pid: 1300,
+                name: "winlogon.exe".into(),
+                owner: "SYSTEM".into(),
+            },
+            Unreadable {
+                pid: 996,
+                name: "svchost.exe".into(),
+                owner: "SYSTEM".into(),
+            },
+        ];
+
+        report_unreadable_paths(&mut ctx, &entries, false);
+        assert_eq!(ctx.findings.len(), 1, "one finding, not one per process");
+        let f = &ctx.findings[0];
+        assert_eq!(f.severity, Severity::Info);
+        assert!(f.title.contains('3'), "title was: {}", f.title);
+        assert!(f.evidence.iter().any(|l| l == "affected processes: 3"));
+        // Distinct names in evidence, not a pid-per-line wall.
+        let names = f
+            .evidence
+            .iter()
+            .find(|l| l.starts_with("names: "))
+            .cloned()
+            .unwrap_or_default();
+        assert!(names.contains("svchost.exe"), "names was: {names}");
+        assert!(names.contains("winlogon.exe"), "names was: {names}");
+
+        // Elevated: the same observation is concealment, so it stays Med.
+        let mut elevated_ctx = ScanContext::default();
+        report_unreadable_paths(&mut elevated_ctx, &entries, true);
+        assert_eq!(elevated_ctx.findings.len(), 1);
+        assert_eq!(elevated_ctx.findings[0].severity, Severity::Med);
+
+        // Nothing to report when nothing was unreadable.
+        let mut empty = ScanContext::default();
+        report_unreadable_paths(&mut empty, &[], false);
+        assert!(empty.findings.is_empty());
     }
 }

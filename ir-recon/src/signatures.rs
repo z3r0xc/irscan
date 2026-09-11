@@ -70,6 +70,17 @@ fn normalize(s: &str) -> String {
     s.replace('/', "\\").to_lowercase()
 }
 
+/// Does any path component or command-line token equal `needle` exactly?
+///
+/// Used for needles that carry no separator: such a needle is a file name, and
+/// substring matching on a file name is how `sqlite3.dll` came to match
+/// `e_sqlite3.dll` - exactly the false lead this function prevents.
+fn contains_component(candidate: &str, needle: &str) -> bool {
+    candidate
+        .split(|c: char| c == '\\' || c == '/' || c.is_whitespace() || c == '"')
+        .any(|component| component == needle)
+}
+
 fn matches_one(sig: &Signature, hay: &Haystack) -> bool {
     if !sig.kind.accepts(hay.kind) {
         return false;
@@ -85,6 +96,17 @@ fn matches_one(sig: &Signature, hay: &Haystack) -> bool {
         // Image names are compared exactly on the final path component, so that
         // "agent.exe" cannot be matched by an unrelated "my-agent-helper.exe".
         SigKind::ProcessName => normalize(crate::text::basename(&hay.value)) == needle,
+        // A path needle carrying a separator is a fragment and is searched for as
+        // one; without a separator it is a file name and must match a whole
+        // component of the value.
+        SigKind::Path => {
+            let candidate = normalize(&hay.value);
+            if needle.contains('\\') {
+                candidate.contains(needle)
+            } else {
+                contains_component(&candidate, needle)
+            }
+        }
         // Everything else is a literal substring test on a normalized string.
         _ => normalize(&hay.value).contains(needle),
     }
@@ -111,11 +133,15 @@ pub fn match_against(sigs: &[Signature], haystack: &[Haystack]) -> Vec<Finding> 
             if sig.kind.is_strong() && !entry.0.is_strong() {
                 entry.0 = sig.kind;
             }
+            // The needle is part of the evidence on purpose. Without it a reader
+            // cannot tell a precise match ("agent.exe") from a loose one ("setup.exe"),
+            // and a finding nobody can audit is a finding nobody should trust.
             let line = format!(
-                "{} '{}' matched {} ({})",
+                "{} '{}' matched {} needle '{}' ({})",
                 hay.kind.label(),
                 hay.value,
                 sig.kind.label(),
+                sig.needle,
                 hay.origin
             );
             if entry.2.len() < 8 && !entry.2.iter().any(|l| l == &line) {
@@ -292,6 +318,46 @@ mod tests {
         // A domain needle must not match a process name that happens to contain it.
         let sigs = [sig("Acme", SigKind::Domain, "acme.example")];
         assert!(match_against(&sigs, &[hay(HaystackKind::ProcessName, "acme.example")]).is_empty());
+    }
+
+    #[test]
+    fn a_bare_file_name_needle_must_match_a_whole_component() {
+        // The real case: an upstream entry of `sqlite3.dll` must not match
+        // `e_sqlite3.dll`, which is what produced a false "Xshell [RAT]" finding.
+        let sigs = [sig("Xshell", SigKind::Path, "sqlite3.dll")];
+        assert!(match_against(
+            &sigs,
+            &[hay(
+                HaystackKind::Path,
+                r"C:\Users\b\AppData\Local\PowerToys\e_sqlite3.dll"
+            )]
+        )
+        .is_empty());
+        // A genuine file name still matches, in a path and in a command line.
+        assert_eq!(
+            match_against(&sigs, &[hay(HaystackKind::Path, r"C:\x\sqlite3.dll")]).len(),
+            1
+        );
+        assert_eq!(
+            match_against(
+                &sigs,
+                &[hay(
+                    HaystackKind::CommandLine,
+                    r#"cmd /c "C:\x\sqlite3.dll" -q"#
+                )]
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_fragment_needle_still_matches_as_a_substring() {
+        let sigs = [sig("Acme", SigKind::Path, "acme\\agent")];
+        assert_eq!(
+            match_against(&sigs, &[hay(HaystackKind::Path, r"C:\x\acme\agent.exe")]).len(),
+            1
+        );
     }
 
     #[test]

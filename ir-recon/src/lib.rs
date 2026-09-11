@@ -12,6 +12,7 @@
 #![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used))]
 
 pub mod collect;
+pub mod known_services;
 pub mod model;
 pub mod report;
 pub mod rules;

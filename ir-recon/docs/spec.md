@@ -88,6 +88,8 @@ Each requirement is testable; the right column names the automated check.
 | FR-26 | Keeps the report file plain and byte-stable; the styled view is console-only | `report_rendering_is_deterministic`, `console_view_renders_every_section_and_stays_within_the_width` |
 | FR-27 | Collapses structurally identical findings in the console view with an instance count, while the JSON keeps every instance | `identical_findings_collapse_into_one_entry_with_a_count`, `json_output_has_the_documented_shape` |
 | FR-28 | Reports progress per collector, to stderr, so a redirected stdout still receives a clean report | `progress_is_reported_for_every_collector_including_a_failing_one` |
+| FR-29 | A service Windows itself ships is recognised by name (including per-user `_hex` instance suffixes) so that an unsigned, unreadable or absent image on a system service is not reported as if it were an unknown agent | `known_services::lookup`, `per_user_suffixes_are_stripped`, `unknown_names_return_none_instead_of_a_guess` |
+| FR-30 | The known-service table is generated mechanically from its upstream source, and regenerating it is byte-identical | `tools/gen_known_services.py`, verified by re-running and comparing |
 
 ## 6. Quality attributes and tactics (ADD)
 
@@ -169,6 +171,8 @@ Stable field names; additive changes only, guarded by `json_schema_*` tests.
   ESC byte at all.
 - AC-10: A syntactically broken rule file passed to `--yara-rules` costs only that file:
   the bundled rules still load and the report carries a warning naming the file.
+- AC-11: Regenerating `known_services.rs` produces a byte-identical file, and the table
+  contains no duplicate names and no entry without a safety rating.
 
 ## 10. Test plan (TDD)
 

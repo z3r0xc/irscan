@@ -323,6 +323,27 @@ fn clean_needle(raw: &str) -> Option<String> {
     if !s.chars().any(|c| c.is_ascii_alphanumeric()) {
         return None;
     }
+
+    // A needle must be specific enough to mean something. Without this check an
+    // upstream `InstallationPaths` entry of "setup" became a needle that matched
+    // every installer on the machine, producing three false "remote-control
+    // product detected" findings on a clean host. A usable needle is either a path
+    // (it contains a separator) or a file name (it carries an extension).
+    let has_separator = s.contains('\\');
+    let has_extension = match s.rsplit_once('.') {
+        Some((stem, ext)) => {
+            !stem.is_empty()
+                && (2..=5).contains(&ext.len())
+                && ext.chars().all(|c| c.is_ascii_alphabetic())
+        }
+        None => false,
+    };
+    if !has_separator && !has_extension {
+        return None;
+    }
+    if !has_separator && s.chars().count() < 6 {
+        return None;
+    }
     Some(s)
 }
 

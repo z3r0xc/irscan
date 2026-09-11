@@ -11,8 +11,9 @@
 //! `LocalSystem`. A *driver* service additionally loads into the kernel, which is
 //! the mechanism behind input interception and screen capture at a level no
 //! user-mode tool can inspect - hence the escalation rule in [`service_severity`].
-//! `LocalSystem` plus a user-writable image path is, on its own, the shape of an
-//! agent that took over the machine.
+//! `LocalSystem` plus a binary in a *transit* directory is the shape of an agent that
+//! took over the machine; `LocalSystem` under `%ProgramData%` is Windows Defender and
+//! half the machine-wide installers on a developer box, so it is not a finding.
 //!
 //! Every string recorded here comes from the registry and is therefore untrusted;
 //! `ScanContext::note` sanitises, and the raw table is sanitised at the boundary
@@ -22,7 +23,7 @@ use std::path::Path;
 
 use crate::collect::{CollectError, Collector};
 use crate::model::{Finding, HaystackKind, ScanContext, ServiceRecord, Severity};
-use crate::rules::{execution_severity, is_user_writable, looks_masquerading};
+use crate::rules::{classify_location, execution_severity, looks_masquerading, Location};
 use crate::text::{basename, sanitize};
 use crate::win::services::enum_services;
 use crate::win::sig::is_signature_trusted;
@@ -52,6 +53,18 @@ pub fn is_system_service_account(account: &str) -> bool {
         None => a,
     };
     tail.eq_ignore_ascii_case("localsystem") || tail.eq_ignore_ascii_case("system")
+}
+
+/// How a [`Location`] reads in a finding title or evidence line.
+///
+/// The report is read by a human under time pressure, so the wire names are spelled
+/// out once here rather than at each format site.
+pub fn location_label(location: Location) -> &'static str {
+    match location {
+        Location::Privileged => "a privileged location",
+        Location::AppData => "an application data directory",
+        Location::Drop => "a transit directory",
+    }
 }
 
 /// Extract the executable from a service's `ImagePath` value.
@@ -192,27 +205,39 @@ fn names_a_directory(path: &str) -> bool {
 /// Severity for a service, from the two facts `rules` owns plus the driver flag.
 ///
 /// The base decision is [`execution_severity`], so a service is never judged by a
-/// rule invented in this file. The escalations are deliberate and narrow:
+/// rule invented in this file: `Location::AppData` - which is where `%ProgramData%`,
+/// chocolatey, scoop, and Windows Defender's own Platform directory live - yields at
+/// most `Info`, and no longer `High` merely for being there. An earlier version of
+/// this function asked only "is this path user-writable", which made
+/// `C:\ProgramData\...\MsMpEng.exe` a HIGH on a clean machine.
 ///
-/// * a **user-writable driver** is `High` regardless of its signature - what matters
-///   is that a standard user can replace the file that will load into the kernel,
-///   and the signature of the file sitting there today says nothing about the one
-///   that will be there tomorrow;
-/// * an **unsigned driver** is `High` even from a protected directory, because a
-///   kernel driver is the one component in this report that can intercept input or
-///   capture the screen with no user-mode process involved.
+/// The driver escalations remain, because a driver is kernel code and the location
+/// axis means something different for it. Each branch, justified:
+///
+/// * `Drop` or `AppData` plus any signature state -> `High`. A standard user can
+///   replace the file, and the signature on the bytes sitting there today says
+///   nothing about the bytes that will be there at the next boot. `execution_severity`
+///   would call a signed AppData binary "not worth reporting"; for something that
+///   loads into the kernel the replaceability is the risk, not the current signature.
+/// * `Privileged` plus `trusted == Some(false)` -> `High`, one band above the `Med`
+///   that [`execution_severity`] gives an unsigned user-mode service in the same
+///   directory. A driver is the one component in this report that can intercept input
+///   or capture the screen with no user-mode process to inspect.
+/// * `Privileged` plus signed or unverifiable -> whatever `execution_severity` says
+///   (`None`). Every stock in-box driver is exactly this, so escalating here would
+///   produce the noise this change exists to remove.
 pub fn service_severity(
     trusted: Option<bool>,
-    user_writable: bool,
+    location: Location,
     is_driver: bool,
 ) -> Option<Severity> {
-    if is_driver && user_writable {
+    if is_driver && location != Location::Privileged {
         return Some(Severity::High);
     }
     if is_driver && trusted == Some(false) {
         return Some(Severity::High);
     }
-    execution_severity(trusted, user_writable)
+    execution_severity(trusted, location)
 }
 
 /// One stable, readable line per service for the RAW DATA appendix.
@@ -387,12 +412,15 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
         Some(exe) => is_signature_trusted(Path::new(exe)),
         None => None,
     };
-    let user_writable = is_user_writable(&r.image_path);
+    // The location comes from `rules`, on the *image path*, so `%ProgramData%` is
+    // `AppData` (per-machine software lives there) rather than "user-writable".
+    let location = classify_location(&r.image_path);
 
-    if let Some(sev) = service_severity(trusted, user_writable, r.is_driver) {
-        let title = if r.is_driver && user_writable {
+    if let Some(sev) = service_severity(trusted, location, r.is_driver) {
+        let title = if r.is_driver && location != Location::Privileged {
             format!(
-                "Kernel driver {name_disp} loads from a user-writable location ({})",
+                "Kernel driver {name_disp} loads from {} ({})",
+                location_label(location),
                 r.image_path
             )
         } else if r.is_driver {
@@ -400,14 +428,19 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
                 "Kernel driver {name_disp} is not validly signed ({})",
                 r.image_path
             )
-        } else if user_writable && trusted == Some(false) {
+        } else if location == Location::Drop && trusted == Some(false) {
             format!(
-                "Service {name_disp} runs unsigned from a user-writable location ({})",
+                "Service {name_disp} runs unsigned from a transit directory ({})",
                 r.image_path
             )
-        } else if user_writable {
+        } else if location == Location::Drop {
             format!(
-                "Service {name_disp} runs from a user-writable location ({})",
+                "Service {name_disp} runs from a transit directory ({})",
+                r.image_path
+            )
+        } else if location == Location::AppData && trusted == Some(false) {
+            format!(
+                "Service {name_disp} runs unsigned from an application data directory ({})",
                 r.image_path
             )
         } else {
@@ -421,11 +454,12 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
         for line in evidence_lines(r) {
             finding = finding.evidence(line);
         }
-        if user_writable {
-            finding = finding.evidence(
-                "location: user-writable (a standard user, and anything running as that user, \
-                 can replace this binary without elevation)",
-            );
+        if location != Location::Privileged {
+            finding = finding.evidence(format!(
+                "location: {} (a standard user, and anything running as that user, can replace \
+                 this binary without elevation)",
+                location_label(location)
+            ));
         }
         ctx.add(
             finding
@@ -475,22 +509,25 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
         );
     }
 
-    // A non-Microsoft service running as SYSTEM out of a user-writable directory has
-    // no legitimate install story, so the privilege context is stated separately from
-    // the severity block above.
-    if user_writable && is_system_service_account(&r.account) {
+    // A service running as SYSTEM out of a *transit* directory has no legitimate
+    // install story, so the privilege context is stated separately from the severity
+    // block above. Restricted to `Drop`: `%ProgramData%` is `AppData` and hosts
+    // Defender, chocolatey and every machine-wide per-machine installer, so SYSTEM +
+    // AppData is ordinary and was half this machine's false positives.
+    if location == Location::Drop && is_system_service_account(&r.account) {
         ctx.add(
             Finding::new(
                 Severity::High,
                 "service",
-                format!("Service {name_disp} runs as SYSTEM from a user-writable location"),
+                format!("Service {name_disp} runs as SYSTEM from a transit directory"),
             )
             .evidence(format!("account: {}", account_label(&r.account)))
             .evidence(format!("image path: {}", r.image_path))
+            .evidence(format!("location: {}", location_label(location)))
             .evidence(format!("state: {}, start mode: {}", r.state, r.start_mode))
             .evidence(
-                "a service running as SYSTEM from a path a standard user can write to has no \
-                 legitimate explanation",
+                "a service running as SYSTEM from a path a standard user can write to, in a \
+                 location nothing installs into, has no legitimate explanation",
             )
             .remediation(
                 "Stop and disable the service only after capturing the image and its hash; \
@@ -649,35 +686,154 @@ mod tests {
     }
 
     #[test]
+    fn a_programdata_service_is_no_longer_high() {
+        // The acceptance test for this file. Windows Defender's own engine lives in
+        // `C:\ProgramData\Microsoft\Windows Defender\...`, and the old
+        // `is_user_writable` gate made it both a HIGH ("runs as SYSTEM from a
+        // user-writable location") and two MEDs on a clean machine.
+        let def = r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18\MsMpEng.exe";
+        assert_eq!(classify_location(def), Location::AppData);
+        // Signed, unsigned, or unverifiable: AppData never reaches HIGH on location.
+        assert_eq!(service_severity(Some(true), Location::AppData, false), None);
+        assert_eq!(
+            service_severity(Some(false), Location::AppData, false),
+            Some(Severity::Info)
+        );
+        assert_eq!(
+            service_severity(None, Location::AppData, false),
+            None,
+            "an unverifiable signature in AppData is not a finding"
+        );
+        // Same for a chocolatey-installed tool under ProgramData.
+        assert_eq!(
+            service_severity(
+                Some(false),
+                classify_location(r"C:\ProgramData\chocolatey\tools\x.exe"),
+                false
+            ),
+            Some(Severity::Info)
+        );
+    }
+
+    #[test]
     fn severity_follows_rules_and_escalates_drivers() {
         // Base policy is delegated, never reinvented here.
-        assert_eq!(service_severity(Some(true), false, false), None);
         assert_eq!(
-            service_severity(Some(false), false, false),
+            service_severity(Some(true), Location::Privileged, false),
+            None
+        );
+        assert_eq!(
+            service_severity(Some(false), Location::Privileged, false),
+            Some(Severity::Info)
+        );
+        assert_eq!(service_severity(None, Location::Privileged, false), None);
+        // A transit directory is what escalates a user-mode service.
+        assert_eq!(
+            service_severity(Some(false), Location::Drop, false),
+            Some(Severity::High)
+        );
+        assert_eq!(
+            service_severity(None, Location::Drop, false),
             Some(Severity::Med)
         );
-        assert_eq!(service_severity(None, false, false), None);
         assert_eq!(
-            service_severity(Some(false), true, false),
-            Some(Severity::High)
-        );
-        assert_eq!(service_severity(None, true, false), Some(Severity::Med));
-        assert_eq!(
-            service_severity(Some(true), true, false),
+            service_severity(Some(true), Location::Drop, false),
             Some(Severity::Med)
         );
-        // Driver escalation, both branches.
+        // Driver escalation: a replaceable location at any signature state, or an
+        // unsigned driver even from a protected directory.
         assert_eq!(
-            service_severity(Some(false), false, true),
+            service_severity(Some(false), Location::Privileged, true),
             Some(Severity::High)
         );
         assert_eq!(
-            service_severity(Some(true), true, true),
+            service_severity(Some(true), Location::Drop, true),
             Some(Severity::High)
         );
-        assert_eq!(service_severity(None, true, true), Some(Severity::High));
-        // A signed driver in a protected directory is not a finding at all.
-        assert_eq!(service_severity(Some(true), false, true), None);
+        assert_eq!(
+            service_severity(None, Location::Drop, true),
+            Some(Severity::High)
+        );
+        assert_eq!(
+            service_severity(Some(true), Location::AppData, true),
+            Some(Severity::High)
+        );
+        // A signed driver in a protected directory is not a finding at all - every
+        // stock in-box driver is this, and escalating would recreate the noise.
+        assert_eq!(
+            service_severity(Some(true), Location::Privileged, true),
+            None
+        );
+        assert_eq!(service_severity(None, Location::Privileged, true), None);
+    }
+
+    #[test]
+    fn classify_reports_programdata_services_only_informatively() {
+        // Defender's `Platform` directory is the real-world shape, and it is under
+        // `%ProgramData%`. The image path must be a file that exists, or the separate
+        // missing-image rule fires and the test would prove nothing about location.
+        let exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.to_str().map(str::to_string));
+        let Some(exe) = exe else {
+            return;
+        };
+        let reported: Vec<&str> = vec!["Acme", "Defender"];
+        for name in reported {
+            let mut ctx = ScanContext::default();
+            classify(
+                &mut ctx,
+                &rec(name, &exe, "LocalSystem", false),
+                r"C:\Windows",
+            );
+            // The locations under test are the real ones; the file just has to exist.
+            assert_eq!(
+                classify_location(r"C:\ProgramData\Microsoft\Windows Defender\x.exe"),
+                Location::AppData,
+                "precondition: ProgramData is AppData"
+            );
+            for f in &ctx.findings {
+                assert!(
+                    f.severity != Severity::High,
+                    "a service under ProgramData must never be HIGH: {:?}",
+                    f.title
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn classify_escalates_a_programdata_driver_but_not_a_programdata_service() {
+        // The distinction the driver branch exists for: a `.sys` under `%ProgramData%`
+        // is replaceable by a standard user *and* loads into the kernel, so it stays
+        // HIGH; a user-mode service in the same directory does not.
+        assert_eq!(
+            service_severity(
+                Some(true),
+                classify_location(r"C:\ProgramData\Acme\acme.sys"),
+                true
+            ),
+            Some(Severity::High)
+        );
+    }
+
+    #[test]
+    fn a_driver_in_a_transit_directory_is_high() {
+        // A `.sys` under Downloads or %TEMP% is the shape that matters: a standard user
+        // can replace the file and it loads into the kernel.
+        assert_eq!(
+            service_severity(
+                Some(true),
+                classify_location(r"C:\Users\bob\Downloads\evil.sys"),
+                true
+            ),
+            Some(Severity::High)
+        );
+        assert_eq!(location_label(Location::Drop), "a transit directory");
+        assert_eq!(
+            location_label(Location::AppData),
+            "an application data directory"
+        );
     }
 
     #[test]
