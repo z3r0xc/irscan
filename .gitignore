@@ -1,0 +1,19 @@
+# Third-party reference clones: large, read-only ground truth, never committed.
+/raw/
+
+# Rust build output
+/ir-recon/target/
+/_rusttest/
+
+# Generated scan reports must never be committed (they contain host data).
+irscan-*.txt
+irscan-*.json
+IR-Report-*.txt
+
+# Scratch: debug symbols and stray compiler artifacts from ad-hoc probes.
+# `NUL*` catches a Windows-specific accident where a shell redirect to the NUL device
+# creates a real file named NUL.<hash>.rcgu.o in the working directory.
+*.pdb
+*.ilk
+*.rcgu.o
+NUL*

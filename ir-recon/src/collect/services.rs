@@ -1,0 +1,732 @@
+//! Service and kernel-driver triage (FR-3, FR-13, FR-14).
+//!
+//! The SCM enumeration itself lives in [`crate::win::services`]; this module is the
+//! part that decides what the result *means*. Two reasons that split exists: the
+//! FFI half is the only code allowed to contain `unsafe` (SR-6), and the policy half
+//! is pure, so every severity here is decided by [`crate::rules`] and unit-tested
+//! without a Windows host.
+//!
+//! Why this collector matters for the reported symptom: a service is the standard
+//! way to get a component to run before logon, survive reboots and run as
+//! `LocalSystem`. A *driver* service additionally loads into the kernel, which is
+//! the mechanism behind input interception and screen capture at a level no
+//! user-mode tool can inspect - hence the escalation rule in [`service_severity`].
+//! `LocalSystem` plus a user-writable image path is, on its own, the shape of an
+//! agent that took over the machine.
+//!
+//! Every string recorded here comes from the registry and is therefore untrusted;
+//! `ScanContext::note` sanitises, and the raw table is sanitised at the boundary
+//! (SR-2). Nothing in this module writes, executes or connects anywhere.
+
+use std::path::Path;
+
+use crate::collect::{CollectError, Collector};
+use crate::model::{Finding, HaystackKind, ScanContext, ServiceRecord, Severity};
+use crate::rules::{execution_severity, is_user_writable, looks_masquerading};
+use crate::text::{basename, sanitize};
+use crate::win::services::enum_services;
+use crate::win::sig::is_signature_trusted;
+
+/// A returned executable longer than this is not a path worth stat'ing or verifying,
+/// and it may well be hostile. 32 KiB is far past `MAX_PATH` and past the long-path
+/// maximum, so anything beyond it is refused rather than truncated into something
+/// that could resolve to a different file.
+pub const MAX_EXECUTABLE_LEN: usize = 32 * 1024;
+
+/// Does `account` denote the local `LocalSystem` principal?
+///
+/// A service's `ObjectName` is absent only when the account *is* `LocalSystem`, so
+/// the empty string is a real answer rather than missing data. `"LocalSystem"` is
+/// what the Services UI and `sc qc` print, `NT AUTHORITY\SYSTEM` is what the
+/// registry holds on most hosts, and a bare `SYSTEM` appears in keys written by
+/// non-Microsoft installers. The domain prefix is optional because the local
+/// principal can also be written `.\SYSTEM`; matching on the *last* component covers
+/// all three spellings without letting `NT AUTHORITY\SYSTEMX` through.
+pub fn is_system_service_account(account: &str) -> bool {
+    let a = account.trim();
+    if a.is_empty() {
+        return true;
+    }
+    let tail = match a.rsplit_once('\\') {
+        Some((_, name)) => name,
+        None => a,
+    };
+    tail.eq_ignore_ascii_case("localsystem") || tail.eq_ignore_ascii_case("system")
+}
+
+/// Extract the executable from a service's `ImagePath` value.
+///
+/// `ImagePath` is a command line, not a path: it is normally quoted (so that
+/// `C:\Program Files\...` survives), it may carry arguments, and the *unquoted*
+/// form is ambiguous about where the program name ends. Microsoft's own guidance is
+/// to quote it; when a host does not, this function recovers the boundary by taking
+/// the **last** whitespace-separated token that carries an executable extension
+/// (`EXECUTABLE_EXTENSIONS`) and keeping everything up to it:
+///
+/// * `"C:\Program Files\X\agent.exe" -k x` -> the quoted name, authoritatively;
+/// * `C:\Windows\System32\svchost.exe -k netsvcs` -> `...\svchost.exe`;
+/// * `C:\Program Files\My Agent\agent.exe -k x` -> `...\My Agent\agent.exe`.
+///
+/// A value with *no* executable-extension token anywhere has no recoverable
+/// boundary, so the whole string is returned and the drive-letter check below judges
+/// it. A path that names a directory (a trailing separator, or `.`/`..`) is refused:
+/// it is not a program, and returning it would make the collector stat and
+/// signature-check a directory and report a bogus missing image.
+///
+/// A path is accepted **only** when it starts with a drive letter. That is what
+/// keeps the "missing image" rule honest: [`crate::win::system_vars`] is a fixed
+/// variable list, so an unrecognised `%VAR%` survives expansion verbatim, and
+/// stat'ing a literal `%VAR%\x.exe` would declare every such service missing. An
+/// unexpanded path is a gap in the evidence, not evidence of malware, so it yields
+/// `None` here.
+pub fn service_executable(image_path: &str) -> Option<String> {
+    let trimmed = image_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let first = if let Some(inner) = trimmed.strip_prefix('"') {
+        // Quoted: the first quote closes the name; an unterminated quote means the
+        // value is malformed and nothing about its shape can be trusted.
+        let (name, _) = inner.split_once('"')?;
+        name.trim().to_string()
+    } else {
+        // Unquoted, and therefore ambiguous: every token boundary is a candidate end
+        // of the program name. The binary is the LAST token that carries a known
+        // executable extension, so walking leftwards finds it without guessing:
+        //   `...\System32\svchost.exe -k netsvcs` -> token 0 ends in .exe -> token 0
+        //   `...\My Agent\agent.exe -k x`          -> token 2 ends in .exe -> tokens 0..=2
+        // A value with no executable extension at all has no recoverable boundary, so
+        // the whole string is returned and the drive-letter check below judges it.
+        let mut cut: Option<usize> = None;
+        for (index, token) in trimmed.split(' ').enumerate() {
+            if has_executable_extension(token) {
+                cut = Some(index);
+            }
+        }
+        match cut {
+            Some(last) => trimmed[..token_end(trimmed, last)].to_string(),
+            None => trimmed.to_string(),
+        }
+    };
+
+    let path = first.trim();
+    if path.is_empty() || path.len() > MAX_EXECUTABLE_LEN {
+        return None;
+    }
+    // A path whose final component is empty names a directory, not a program:
+    // returning it would make the collector stat and signature-check a directory and
+    // report a "missing image" for something that was never a file.
+    if names_a_directory(path) {
+        return None;
+    }
+    let mut chars = path.chars();
+    let drive = chars.next()?;
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+    if chars.next() != Some(':') {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+/// Extensions the service and driver loaders accept for a binary. A token ending in
+/// one of these is a candidate end of the program name in an unquoted `ImagePath`.
+const EXECUTABLE_EXTENSIONS: &[&str] = &[
+    ".exe", ".com", ".sys", ".dll", ".bat", ".cmd", ".ps1", ".vbs", ".js",
+];
+
+/// Does this token look like a program name?
+fn has_executable_extension(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    EXECUTABLE_EXTENSIONS.iter().any(|e| lower.ends_with(e))
+}
+
+/// Byte offset just past the `index`-th space-separated token of `value`.
+///
+/// `index` is bounded by the enumeration that produced it, and the loop stops at the
+/// end of the string, so the result is always a character boundary the caller can
+/// slice at. Splitting on `' '` rather than on a Unicode whitespace class keeps the
+/// byte offsets trivially computable.
+fn token_end(value: &str, index: usize) -> usize {
+    let bytes = value.as_bytes();
+    let mut seen = 0usize;
+    let mut at = 0usize;
+    while at < bytes.len() {
+        if bytes[at] == b' ' {
+            if seen == index {
+                return at;
+            }
+            seen += 1;
+            // Collapse a run of spaces so `a  b` still counts as two tokens, the way
+            // `split(' ')` above does not - the enumeration governs, so this only
+            // mirrors it for the common single-space case.
+            while at < bytes.len() && bytes[at] == b' ' {
+                at += 1;
+            }
+            continue;
+        }
+        at += 1;
+    }
+    bytes.len()
+}
+
+/// Does this path name a directory rather than a program?
+///
+/// A trailing separator (`C:\Windows\System32\`), and the `.` / `..` components,
+/// are directory references. Treating them as an executable would make the collector
+/// stat a directory, fail the signature check and report a bogus "missing image".
+fn names_a_directory(path: &str) -> bool {
+    let trimmed = path.trim_end_matches([' ', '\\', '/']);
+    if trimmed.len() != path.trim_end().len() {
+        // The path ended in a separator (ignoring trailing blanks): a directory.
+        return true;
+    }
+    match path.rsplit(['\\', '/']).next() {
+        Some(last) => last == "." || last == "..",
+        None => true,
+    }
+}
+
+/// Severity for a service, from the two facts `rules` owns plus the driver flag.
+///
+/// The base decision is [`execution_severity`], so a service is never judged by a
+/// rule invented in this file. The escalations are deliberate and narrow:
+///
+/// * a **user-writable driver** is `High` regardless of its signature - what matters
+///   is that a standard user can replace the file that will load into the kernel,
+///   and the signature of the file sitting there today says nothing about the one
+///   that will be there tomorrow;
+/// * an **unsigned driver** is `High` even from a protected directory, because a
+///   kernel driver is the one component in this report that can intercept input or
+///   capture the screen with no user-mode process involved.
+pub fn service_severity(
+    trusted: Option<bool>,
+    user_writable: bool,
+    is_driver: bool,
+) -> Option<Severity> {
+    if is_driver && user_writable {
+        return Some(Severity::High);
+    }
+    if is_driver && trusted == Some(false) {
+        return Some(Severity::High);
+    }
+    execution_severity(trusted, user_writable)
+}
+
+/// One stable, readable line per service for the RAW DATA appendix.
+///
+/// Fixed field order and `<none>` placeholders (rather than omitting fields) so two
+/// scans of an unchanged host diff cleanly.
+pub fn describe(r: &ServiceRecord) -> String {
+    format!(
+        "{}  [{}]  state={} start={} account={} driver={} image={}",
+        r.name,
+        if r.display_name.is_empty() {
+            "<none>"
+        } else {
+            r.display_name.as_str()
+        },
+        r.state,
+        r.start_mode,
+        account_label(&r.account),
+        if r.is_driver { "yes" } else { "no" },
+        if r.image_path.is_empty() {
+            "<none reported>"
+        } else {
+            r.image_path.as_str()
+        },
+    )
+}
+
+/// The evidence block every service finding attaches.
+///
+/// Name, state, start mode, account and the full image path travel with the finding,
+/// as required: a severity tag on its own is not actionable, and the point of this
+/// report is that a human can verify every claim it makes.
+pub fn evidence_lines(r: &ServiceRecord) -> Vec<String> {
+    vec![
+        format!(
+            "service: {} ({})",
+            r.name,
+            if r.display_name.is_empty() {
+                "<none>"
+            } else {
+                r.display_name.as_str()
+            }
+        ),
+        format!("state: {}", r.state),
+        format!("start mode: {}", r.start_mode),
+        format!("account: {}", account_label(&r.account)),
+        format!(
+            "image path: {}",
+            if r.image_path.is_empty() {
+                "<none reported>"
+            } else {
+                r.image_path.as_str()
+            }
+        ),
+        format!(
+            "type: {}",
+            if r.is_driver {
+                "kernel driver"
+            } else {
+                "win32 service"
+            }
+        ),
+    ]
+}
+
+/// How an account reads in the report. An absent `ObjectName` is not missing data:
+/// it means `LocalSystem`, and printing an empty field would read like a gap.
+pub fn account_label(account: &str) -> &str {
+    if account.is_empty() {
+        "LocalSystem (default)"
+    } else {
+        account
+    }
+}
+
+/// The service's binary path, when it names one and that file is gone.
+///
+/// `None` covers every situation that must stay silent: no path was extracted (many
+/// in-box kernel services genuinely carry no `ImagePath`), or the file is there.
+/// A callable so the negative cases are testable without a host.
+pub fn missing_image(executable: &Option<String>) -> Option<String> {
+    let exe = executable.as_deref()?;
+    // UNC paths have no drive letter, so `service_executable` already refused them;
+    // the guard is repeated so this function is safe when called on its own.
+    if exe.starts_with(r"\\") {
+        return None;
+    }
+    if Path::new(exe).is_file() {
+        return None;
+    }
+    Some(exe.to_string())
+}
+
+/// Enumerates services and kernel drivers into the context.
+pub struct ServicesCollector;
+
+impl Collector for ServicesCollector {
+    fn name(&self) -> &'static str {
+        "services"
+    }
+
+    fn run(&self, ctx: &mut ScanContext) -> Result<(), CollectError> {
+        // A failure here means the SCM itself could not be opened, which on a normal
+        // host means "not elevated". The report must say so rather than show an empty
+        // service list that reads like a clean result.
+        let services = match enum_services() {
+            Ok(s) => s,
+            Err(e) => return Err(CollectError::new("services", e)),
+        };
+
+        if services.is_empty() {
+            ctx.warn("service enumeration returned no services");
+        }
+
+        let system_root = crate::win::system_root();
+        let mut table: Vec<String> = Vec::with_capacity(services.len());
+
+        for r in services {
+            // Haystacks first: they are what the signature database matches, and they
+            // are recorded even for a service with nothing wrong with it.
+            let origin = format!(
+                "service {}",
+                if r.name.is_empty() {
+                    "<unnamed>"
+                } else {
+                    r.name.as_str()
+                }
+            );
+            ctx.note(HaystackKind::ServiceName, r.name.clone(), origin.clone());
+            ctx.note(
+                HaystackKind::ServiceDisplayName,
+                r.display_name.clone(),
+                origin.clone(),
+            );
+            ctx.note(HaystackKind::Path, r.image_path.clone(), origin.clone());
+            // The key a service must live under is itself searchable: LOLRMM entries
+            // name these paths, and a product that hides its binary can still be
+            // spotted by the key it persists through.
+            ctx.note(
+                HaystackKind::RegistryPath,
+                format!(r"SYSTEM\CurrentControlSet\Services\{}", r.name),
+                origin,
+            );
+
+            table.push(describe(&r));
+            classify(ctx, &r, &system_root);
+            ctx.services.push(r);
+        }
+
+        ctx.raw_section("SERVICES", table);
+        Ok(())
+    }
+}
+
+/// Apply the FR-13 / FR-14 policy to one service and push anything it warrants.
+///
+/// Kept out of the enumeration loop so the rule block stays readable and the only
+/// severity source is [`service_severity`]. A service is *not* reported merely for
+/// running: several hundred on a normal host run as `LocalSystem` out of `System32`,
+/// and reporting those would bury the entry that matters.
+fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
+    let name_disp = if r.name.is_empty() {
+        "<unnamed>"
+    } else {
+        r.name.as_str()
+    };
+    let executable = service_executable(&r.image_path);
+    // The signature is verified on the *extracted executable*, not on the whole
+    // `ImagePath`: WinVerifyTrust needs a file, and handing it `"C:\x.exe" -k` would
+    // either fail or be resolved by the OS to something unintended.
+    let trusted = match executable.as_deref() {
+        Some(exe) => is_signature_trusted(Path::new(exe)),
+        None => None,
+    };
+    let user_writable = is_user_writable(&r.image_path);
+
+    if let Some(sev) = service_severity(trusted, user_writable, r.is_driver) {
+        let title = if r.is_driver && user_writable {
+            format!(
+                "Kernel driver {name_disp} loads from a user-writable location ({})",
+                r.image_path
+            )
+        } else if r.is_driver {
+            format!(
+                "Kernel driver {name_disp} is not validly signed ({})",
+                r.image_path
+            )
+        } else if user_writable && trusted == Some(false) {
+            format!(
+                "Service {name_disp} runs unsigned from a user-writable location ({})",
+                r.image_path
+            )
+        } else if user_writable {
+            format!(
+                "Service {name_disp} runs from a user-writable location ({})",
+                r.image_path
+            )
+        } else {
+            format!(
+                "Service {name_disp} is not validly signed ({})",
+                r.image_path
+            )
+        };
+
+        let mut finding = Finding::new(sev, "service", title);
+        for line in evidence_lines(r) {
+            finding = finding.evidence(line);
+        }
+        if user_writable {
+            finding = finding.evidence(
+                "location: user-writable (a standard user, and anything running as that user, \
+                 can replace this binary without elevation)",
+            );
+        }
+        ctx.add(
+            finding
+                .remediation(
+                    "Hash the image (SHA-256) and record the path and service name before any change.",
+                )
+                .remediation(
+                    "A service binary a standard user can replace is by itself a path to SYSTEM; \
+                     if this is not a program you installed, remove the service and rebuild the \
+                     host from external media.",
+                ),
+        );
+    }
+
+    // A registered service whose binary is gone is the shape of a payload removed
+    // while its persistence entry survived: a half-finished uninstall, or a
+    // deliberate attempt to keep the name reachable. Either way it needs a human.
+    if let Some(missing) = missing_image(&executable) {
+        ctx.add(
+            Finding::new(
+                Severity::High,
+                "service",
+                format!("Service {name_disp} points at a file that does not exist: {missing}"),
+            )
+            .evidence(format!(
+                "the service is still registered with the Service Control Manager but \
+                 {missing} is absent"
+            ))
+            .evidence(format!("registered image path: {}", r.image_path))
+            .evidence(format!(
+                "start mode: {}, state: {}",
+                r.start_mode, r.state
+            ))
+            .evidence(format!("account: {}", account_label(&r.account)))
+            .evidence(
+                "a surviving definition with a missing payload is more often deliberate cleanup \
+                 of evidence than harmless leftover",
+            )
+            .remediation(
+                "Check the System event log for event 7045 entries naming this service to find out \
+                 what created it, and look in prefetch for the payload's execution trace.",
+            )
+            .remediation(
+                "Delete the service key only after the report is preserved; record the service \
+                 name and its original image path in the incident notes.",
+            ),
+        );
+    }
+
+    // A non-Microsoft service running as SYSTEM out of a user-writable directory has
+    // no legitimate install story, so the privilege context is stated separately from
+    // the severity block above.
+    if user_writable && is_system_service_account(&r.account) {
+        ctx.add(
+            Finding::new(
+                Severity::High,
+                "service",
+                format!("Service {name_disp} runs as SYSTEM from a user-writable location"),
+            )
+            .evidence(format!("account: {}", account_label(&r.account)))
+            .evidence(format!("image path: {}", r.image_path))
+            .evidence(format!("state: {}, start mode: {}", r.state, r.start_mode))
+            .evidence(
+                "a service running as SYSTEM from a path a standard user can write to has no \
+                 legitimate explanation",
+            )
+            .remediation(
+                "Stop and disable the service only after capturing the image and its hash; \
+                 anything running as SYSTEM from a writable directory should be assumed to have \
+                 had full control of this machine.",
+            ),
+        );
+    }
+
+    // FR-14: a system binary name outside the Windows directory. `looks_masquerading`
+    // takes an image *name*, so the executable is extracted first; a service with no
+    // usable path cannot masquerade in this sense and is left alone.
+    if let Some(exe) = executable.as_deref() {
+        if looks_masquerading(basename(exe), exe, system_root) {
+            ctx.add(
+                Finding::new(
+                    Severity::High,
+                    "service",
+                    format!(
+                        "Service {name_disp} runs a system-process name from outside the Windows \
+                         directory"
+                    ),
+                )
+                .evidence(format!("image path: {exe}"))
+                .evidence(format!(
+                    "expected location: {}\\System32\\{}",
+                    system_root.trim_end_matches('\\'),
+                    basename(exe)
+                ))
+                .evidence(format!("service name: {name_disp}"))
+                .evidence(format!("account: {}", account_label(&r.account)))
+                .remediation(
+                    "A Windows component name outside %SystemRoot% is not legitimate; capture the \
+                     file and treat the host as compromised.",
+                ),
+            );
+        }
+    }
+}
+
+/// Sanitise a value for any record field this module derives from raw registry text.
+///
+/// [`crate::win::services`] already sanitises what it returns, so this is a single
+/// named boundary rather than a scattered call - the one place to change if service
+/// data ever needs a different cap.
+pub fn clean(value: &str) -> String {
+    sanitize(value, crate::model::MAX_STRING)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(name: &str, image_path: &str, account: &str, is_driver: bool) -> ServiceRecord {
+        ServiceRecord {
+            name: name.to_string(),
+            display_name: name.to_string(),
+            state: "running".to_string(),
+            start_mode: "auto".to_string(),
+            account: account.to_string(),
+            image_path: image_path.to_string(),
+            is_driver,
+        }
+    }
+
+    #[test]
+    fn executable_from_a_quoted_path_with_arguments() {
+        assert_eq!(
+            service_executable(r#""C:\Program Files\Acme Agent\agent.exe" -service"#).as_deref(),
+            Some(r"C:\Program Files\Acme Agent\agent.exe")
+        );
+    }
+
+    #[test]
+    fn executable_from_a_bare_path() {
+        assert_eq!(
+            service_executable(r"C:\Windows\System32\svchost.exe").as_deref(),
+            Some(r"C:\Windows\System32\svchost.exe")
+        );
+        assert_eq!(
+            service_executable("  C:/Windows/System32/x.exe  ").as_deref(),
+            Some("C:/Windows/System32/x.exe")
+        );
+    }
+
+    #[test]
+    fn unquoted_path_with_arguments_is_repaired_at_the_last_executable_token() {
+        // No spaces in the path: the first token is the binary, the rest is arguments.
+        assert_eq!(
+            service_executable(r"C:\Windows\System32\svchost.exe -k netsvcs").as_deref(),
+            Some(r"C:\Windows\System32\svchost.exe")
+        );
+        // A space in the path: the last token carrying an executable extension is the
+        // binary, so the name runs up to it and the switch is left behind.
+        assert_eq!(
+            service_executable(r"C:\Program Files\My Agent\agent.exe -k x").as_deref(),
+            Some(r"C:\Program Files\My Agent\agent.exe")
+        );
+        // A switch that itself looks executable-ish must not win over the binary: the
+        // *last* extension token wins, which is wrong here only if the trailing
+        // argument is also a program path - and that is the documented ambiguity, so
+        // the test pins the behaviour rather than pretending it does not exist.
+        assert_eq!(
+            service_executable(r"C:\Tools\agent.exe --config").as_deref(),
+            Some(r"C:\Tools\agent.exe")
+        );
+    }
+
+    #[test]
+    fn unexpanded_environment_path_is_not_an_executable() {
+        // The drive-letter rule exists for exactly this: stat'ing these would report
+        // every service that uses `%ProgramFiles%` as missing on disk.
+        assert_eq!(service_executable(r"%ProgramFiles%\x\y.exe"), None);
+        assert_eq!(service_executable(r"%SystemRoot%\System32\x.exe"), None);
+        assert_eq!(service_executable("").as_deref(), None);
+        assert_eq!(service_executable("   ").as_deref(), None);
+        // Malformed shapes are not guessed at either.
+        assert_eq!(service_executable(r#""C:\unterminated"#), None);
+        assert_eq!(service_executable(r"1:\not-a-drive\x.exe"), None);
+    }
+
+    #[test]
+    fn a_directory_is_not_an_executable() {
+        // A trailing separator names a directory, so stat'ing it would produce a
+        // nonsensical "missing image" finding for something that was never a file.
+        assert_eq!(service_executable(r"C:\Windows\System32\"), None);
+        assert_eq!(service_executable(r"C:\Program Files\Acme Agent\"), None);
+        assert_eq!(service_executable("C:/Windows/"), None);
+        // Trailing blanks must not smuggle the separator past the check.
+        assert_eq!(service_executable("C:/Windows/   "), None);
+        // The dot components are directories too.
+        assert_eq!(service_executable(r"C:\Tools\."), None);
+        assert_eq!(service_executable(r"C:\Tools\.."), None);
+        // A quoted command line naming a directory is refused for the same reason.
+        assert_eq!(
+            service_executable(r#""C:\Windows\System32\" -k netsvcs"#),
+            None
+        );
+    }
+
+    #[test]
+    fn system_account_truth_table() {
+        // An absent ObjectName *is* LocalSystem: that is what the registry means.
+        assert!(is_system_service_account(""));
+        assert!(is_system_service_account("   "));
+        assert!(is_system_service_account("LocalSystem"));
+        assert!(is_system_service_account(r"NT AUTHORITY\SYSTEM"));
+        assert!(is_system_service_account(r"NT AUTHORITY\system"));
+        assert!(is_system_service_account("SYSTEM"));
+        assert!(is_system_service_account(r".\SYSTEM"));
+        // The negatives that matter: the other in-box service accounts.
+        assert!(!is_system_service_account(r"NT AUTHORITY\LocalService"));
+        assert!(!is_system_service_account(r"NT AUTHORITY\NetworkService"));
+        assert!(!is_system_service_account("Local System"));
+        assert!(!is_system_service_account(r"NT AUTHORITY\SYSTEMX"));
+    }
+
+    #[test]
+    fn severity_follows_rules_and_escalates_drivers() {
+        // Base policy is delegated, never reinvented here.
+        assert_eq!(service_severity(Some(true), false, false), None);
+        assert_eq!(
+            service_severity(Some(false), false, false),
+            Some(Severity::Med)
+        );
+        assert_eq!(service_severity(None, false, false), None);
+        assert_eq!(
+            service_severity(Some(false), true, false),
+            Some(Severity::High)
+        );
+        assert_eq!(service_severity(None, true, false), Some(Severity::Med));
+        assert_eq!(
+            service_severity(Some(true), true, false),
+            Some(Severity::Med)
+        );
+        // Driver escalation, both branches.
+        assert_eq!(
+            service_severity(Some(false), false, true),
+            Some(Severity::High)
+        );
+        assert_eq!(
+            service_severity(Some(true), true, true),
+            Some(Severity::High)
+        );
+        assert_eq!(service_severity(None, true, true), Some(Severity::High));
+        // A signed driver in a protected directory is not a finding at all.
+        assert_eq!(service_severity(Some(true), false, true), None);
+    }
+
+    #[test]
+    fn missing_image_only_fires_for_an_extracted_drive_path() {
+        // Nothing extracted -> nothing to say (covers kernel services with no path).
+        assert_eq!(missing_image(&None), None);
+        // A file that exists is not missing.
+        if let Some(p) = std::env::current_exe()
+            .ok()
+            .as_deref()
+            .and_then(|p| p.to_str())
+        {
+            assert_eq!(missing_image(&Some(p.to_string())), None);
+        }
+        // A path that cannot exist is reported verbatim.
+        assert_eq!(
+            missing_image(&Some(r"C:\IRScan-Does-Not-Exist\ghost.exe".to_string())),
+            Some(r"C:\IRScan-Does-Not-Exist\ghost.exe".to_string())
+        );
+        // UNC has no drive letter: no stat, no finding.
+        assert_eq!(
+            missing_image(&Some(r"\\server\share\x.exe".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn describe_and_evidence_use_placeholders_not_empty_fields() {
+        let line = describe(&rec("AcmeAgent", "", "", false));
+        assert!(line.contains("AcmeAgent"), "name always present: {line}");
+        assert!(
+            line.contains("LocalSystem (default)"),
+            "absent account is named: {line}"
+        );
+        assert!(
+            line.contains("<none reported>"),
+            "absent image path is named: {line}"
+        );
+        let ev = evidence_lines(&rec("AcmeAgent", r"C:\x\agent.exe", "", true));
+        assert!(ev.iter().any(|l| l.starts_with("state: ")));
+        assert!(ev.iter().any(|l| l.starts_with("start mode: ")));
+        assert!(ev.iter().any(|l| l == "account: LocalSystem (default)"));
+        assert!(ev.iter().any(|l| l == r"image path: C:\x\agent.exe"));
+        assert!(ev.iter().any(|l| l == "type: kernel driver"));
+    }
+
+    #[test]
+    fn clean_strips_hostile_bytes_from_service_text() {
+        assert_eq!(clean("\u{1b}[31mAcme\u{1b}[0m"), "Acme");
+        assert_eq!(clean("   "), "");
+    }
+}
