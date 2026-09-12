@@ -610,6 +610,71 @@ impl Collector for EventsCollector {
 /// readable" - it probes with a `*` query - so gating on it would let an
 /// unelevated Security log look like a clean one, which is exactly the false
 /// negative this tool exists to avoid.
+/// Render one event for the RAW DATA section, front-loading the fields that decide a finding.
+///
+/// Writing the raw XML looked like the honest choice - no interpretation, no risk of hiding
+/// something - but the XML puts `<EventData>` after `<System>`, and the Data block is exactly
+/// where `ServiceName` and `ImagePath` live for a 7045. Truncated at 512 characters, every
+/// such line ended inside `<Channel>`, so the report showed service-install events with the
+/// name of the installed service missing - while the finding cited that section as its
+/// evidence.
+///
+/// The extracted fields come first now, and the XML fills whatever budget is left, so the
+/// line carries the deciding value and the reader still sees the surrounding system block.
+fn summarize_event_xml(xml: &str, limit: usize) -> String {
+    let Some(fields) = parse_event_xml(xml) else {
+        // Unparseable: the XML is all there is, so hand back as much of it as fits.
+        return sanitize(xml, limit);
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    if !fields.time_created.is_empty() {
+        parts.push(format!("at {}", fields.time_created));
+    }
+    if fields.record_id > 0 {
+        parts.push(format!("record {}", fields.record_id));
+    }
+    if fields.event_id > 0 {
+        parts.push(format!("id {}", fields.event_id));
+    }
+    if !fields.provider.is_empty() {
+        parts.push(fields.provider.clone());
+    }
+
+    // The named Data values, verbatim and in document order, are the payload.
+    let joined = fields
+        .data
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut head = parts.join(" | ");
+    if !joined.is_empty() {
+        if !head.is_empty() {
+            head.push_str(" | ");
+        }
+        head.push_str(&joined);
+    }
+
+    if head.is_empty() {
+        return sanitize(xml, limit);
+    }
+
+    // Fill the remainder with the XML, so the system block is still visible beside it.
+    let used = head.chars().count();
+    if used + 6 >= limit {
+        return sanitize(&head, limit);
+    }
+    let remainder = limit.saturating_sub(used + 6);
+    let tail = sanitize(xml, remainder);
+    if tail.is_empty() {
+        sanitize(&head, limit)
+    } else {
+        sanitize(&format!("{head}  ::  {tail}"), limit)
+    }
+}
+
 fn collect_channel(
     ctx: &mut ScanContext,
     channel: &str,
@@ -641,7 +706,7 @@ fn collect_channel(
     let mut unparsed = 0usize;
     for event in &events {
         if lines.len() < MAX_RAW_LINES {
-            lines.push(sanitize(&event.xml, MAX_DATA_VALUE));
+            lines.push(summarize_event_xml(&event.xml, MAX_DATA_VALUE));
         }
         match parse_event_xml(&event.xml) {
             Some(fields) => parsed.push(fields),
@@ -758,6 +823,39 @@ fn audit_channels(ctx: &mut ScanContext) {
 /// directory, which stays High even when the file is already gone and its signature
 /// cannot be checked: the event log is then the only surviving record of the install,
 /// which is exactly what it is read for.
+/// Is this service name one a remote-access tool registers itself under?
+///
+/// Substring, case-insensitive: installers pad the name (`AnyDesk Service`,
+/// `SplashtopRemoteService`), and the padded form is still the product.
+pub fn is_known_remote_tool_service(name: &str) -> bool {
+    let n = name.trim().to_lowercase();
+    if n.len() < 3 {
+        return false;
+    }
+    crate::remote_tools::REMOTE_TOOL_SERVICE_NAMES
+        .iter()
+        .any(|needle| n.contains(needle))
+}
+
+/// Does this image path name an executable a remote-access tool ships?
+///
+/// Matches on the file name rather than the whole path: the directory varies with the
+/// version and the vendor's habits, the executable name does not.
+pub fn is_known_remote_tool_image(image: &str) -> bool {
+    let path = image.trim().replace('/', "\\").to_lowercase();
+    // Strip a command line: `tvnserver.exe -service` names the same binary.
+    let exe = match path.split(".exe").next() {
+        Some(stem) => format!("{stem}.exe"),
+        None => path.clone(),
+    };
+    if exe.len() < 5 {
+        return false;
+    }
+    crate::remote_tools::REMOTE_TOOL_IMAGES
+        .iter()
+        .any(|needle| exe.contains(needle))
+}
+
 fn service_install_severity(trusted: Option<bool>, image: &str) -> Option<Severity> {
     let location = crate::rules::classify_location(image);
     if location == crate::rules::Location::Drop {
@@ -814,9 +912,26 @@ fn service_install(ctx: &mut ScanContext) {
         } else {
             crate::win::sig::is_signature_trusted(Path::new(&safe_image))
         };
-        let severity = match service_install_severity(trusted, &safe_image) {
-            Some(s) => s,
-            None => continue,
+
+        // A recognised remote-access tool is reported on the strength of its name, which is
+        // the one part of the install a rename of the binary cannot change. This is checked
+        // before the location policy because the two produce the same verdict for a transit
+        // image but only this one catches a tool installed somewhere ordinary - which is how
+        // a legitimate-looking RMM deployment arrives.
+        let known_tool = if is_known_remote_tool_service(&safe_name) {
+            Some("the service name matches a known remote-access tool")
+        } else if is_known_remote_tool_image(&safe_image) {
+            Some("the service image matches a known remote-access tool")
+        } else {
+            None
+        };
+
+        let severity = match known_tool {
+            Some(_) => Severity::Med,
+            None => match service_install_severity(trusted, &safe_image) {
+                Some(s) => s,
+                None => continue,
+            },
         };
 
         let when = if fields.time_created.is_empty() {
@@ -825,13 +940,17 @@ fn service_install(ctx: &mut ScanContext) {
             sanitize(&fields.time_created, MAX_DATA_VALUE)
         };
 
+        let mut finding = Finding::new(
+            severity,
+            "service-install",
+            "Service was installed and logged by the Service Control Manager",
+        );
+        if let Some(reason) = known_tool {
+            finding = finding.evidence(format!("recognised: {reason}"));
+        }
         ctx.add(
-            Finding::new(
-                severity,
-                "service-install",
-                "Service was installed and logged by the Service Control Manager",
-            )
-            .evidence(format!("service: {safe_name}"))
+            finding
+                .evidence(format!("service: {safe_name}"))
             .evidence(format!("image: {safe_image}"))
             .evidence(format!("installed: {when}"))
             .evidence(
@@ -1344,6 +1463,34 @@ fn join_or_dash(items: &[String]) -> String {
     }
 }
 
+#[test]
+fn raw_event_lines_keep_the_event_data_that_is_the_evidence() {
+    // The RAW section used to write `sanitize(&event.xml, 512)`. In a real event the
+    // `<EventData>` block - which is where `ServiceName` and `ImagePath` live - comes
+    // after `<System>`, so it was the first thing cut. The report then showed a 7045
+    // event whose whole point is the name of the service installed, with the name
+    // missing. Observed on this host: every 7045 line ended mid-`<Channel>`.
+    //
+    // A finding cites this section as its evidence, so evidence that omits the deciding
+    // field is not evidence. The line is built from the extracted fields instead.
+    let xml = r#"<Event xmlns='x'><System><EventID>7045</EventID></System><EventData><Data Name="ServiceName">NvModuleTracker</Data><Data Name="ImagePath">\SystemRoot\System32\drivers\nvmodule.sys</Data><Data Name="ServiceType">kernel mode driver</Data></EventData></Event>"#;
+    let line = summarize_event_xml(xml, 4096);
+
+    assert!(
+        line.contains("NvModuleTracker"),
+        "the service name is the evidence and must survive: {line}"
+    );
+    assert!(
+        line.contains("nvmodule.sys"),
+        "the image path is the evidence and must survive: {line}"
+    );
+    assert!(line.contains("7045"), "the event id must survive: {line}");
+
+    // A short limit must still cut, and cut without splitting a character.
+    let short = summarize_event_xml(xml, 40);
+    assert!(short.chars().count() <= 41, "respects the limit: {short}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1519,6 +1666,48 @@ mod tests {
         // The Data element's Name attribute is the key; the unquoted `Service=x`
         // attribute must not have swallowed it.
         assert_eq!(field(&fields, "Svc"), Some(""));
+    }
+
+    #[test]
+    fn a_known_remote_tool_service_name_is_recognised_on_its_own() {
+        // Measured before this existed: 708 ProcessName needles and exactly one
+        // ServiceName needle in the whole signature database. A tool that installs itself
+        // as a service under a name we had never seen was therefore invisible to the 7045
+        // check - despite 7045 being the single best record of how it got there.
+        //
+        // The name survives a rename of the binary, which is what makes this signal worth
+        // having on its own.
+        assert!(is_known_remote_tool_service("AnyDesk Service"));
+        assert!(is_known_remote_tool_service("TeamViewer"));
+        assert!(is_known_remote_tool_service("SplashtopRemoteService"));
+        assert!(is_known_remote_tool_service("mesh agent"));
+
+        // Case-insensitive, because installers are inconsistent.
+        assert!(is_known_remote_tool_service("TEAMVIEWER"));
+        assert!(is_known_remote_tool_service("screeNCOnnect"));
+
+        // An ordinary machine's own services must not trip it. These are real service
+        // names present on this host and in a stock Windows install.
+        assert!(is_known_remote_tool_service("Spooler").eq(&false));
+        assert!(is_known_remote_tool_service("WinDefend").eq(&false));
+        assert!(is_known_remote_tool_service("wuauserv").eq(&false));
+        assert!(is_known_remote_tool_service("Dnscache").eq(&false));
+        // And an empty name is not a match.
+        assert!(is_known_remote_tool_service("").eq(&false));
+    }
+
+    #[test]
+    fn a_known_remote_tool_image_is_recognised() {
+        assert!(is_known_remote_tool_image(
+            r"C:\Program Files\AnyDesk\AnyDesk.exe"
+        ));
+        assert!(is_known_remote_tool_image("tvnserver.exe"));
+        assert!(is_known_remote_tool_image(r"C:\x\vncserver.exe -service"));
+        // Ordinary system binaries must not match.
+        assert!(
+            is_known_remote_tool_image(r"C:\Windows\System32\svchost.exe -k netsvcs").eq(&false)
+        );
+        assert!(is_known_remote_tool_image("").eq(&false));
     }
 
     #[test]

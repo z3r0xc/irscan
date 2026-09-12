@@ -122,6 +122,8 @@ licence and what was taken, so the licence obligation stays visible.
 | Item | Source | Licence | What was taken |
 |---|---|---|---|
 | Record-sequence gap detection | [WithSecureLabs/chainsaw](https://github.com/WithSecureLabs/chainsaw) `src/analyse/gaps.rs` | GPL-3.0 | **The idea only.** No code was copied: `ir-recon/src/logaudit.rs` is an independent Rust implementation of "a hole in a sequential record id is evidence of deletion". Recorded here because the idea is theirs and attribution is cheap. |
+| Remote-access service and image names | [WithSecureLabs/chainsaw](https://github.com/WithSecureLabs/chainsaw) `rules/evtx/service_installation/remote_access_tools.yml` | GPL-3.0 | **Data.** 33 service names and 39 image names, extracted by `tools/gen_remote_tools.py` into `ir-recon/src/remote_tools.rs`. No rule engine or code was taken - the YAML is parsed for two literal string lists and re-emitted in this project's own format. The generator is deterministic and `tools/check_generated.sh` proves the committed file matches its source. |
+| Suspicious file names for masquerade detection | [AdventDevInc/kudu](https://github.com/AdventDevInc/kudu) `src/main/ipc/malware-scanner.ipc.ts` | MIT | **Data.** Four names added to `rules::SYSTEM_PROCESS_NAMES` (`taskmgr.exe`, `rundll32.exe`, `dllhost.exe`, `conhost.exe`). The remaining eleven were already present. Recorded because it is the source that suggested them and attribution is cheap. |
 
 ### Considered and rejected on capability, not licence
 

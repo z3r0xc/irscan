@@ -37,6 +37,14 @@ const APPDATA_MARKERS: &[&str] = &["\\appdata\\", "\\programdata\\"];
 
 /// Names that belong to core Windows components. Finding one of these outside the
 /// Windows directory (or with no image path at all) is a classic masquerading signal.
+/// Names a user recognises, which is exactly why they are worth wearing.
+///
+/// Every entry must be a binary that legitimately lives in `%SystemRoot%`, because the check
+/// is "this name, but not from where it belongs". `taskmgr.exe` is the sharpest case: it is
+/// the tool someone opens to look for an intruder, so a second copy of it elsewhere is not a
+/// coincidence. `rundll32`, `dllhost` and `conhost` are the standard hosts Windows itself
+/// uses to run code, which is what makes them attractive to hide behind - and also why a copy
+/// outside `%SystemRoot%` has no innocent explanation.
 pub const SYSTEM_PROCESS_NAMES: &[&str] = &[
     "svchost.exe",
     "lsass.exe",
@@ -53,6 +61,12 @@ pub const SYSTEM_PROCESS_NAMES: &[&str] = &[
     "sihost.exe",
     "ctfmon.exe",
     "fontdrvhost.exe",
+    // Four added from kudu's SUSPICIOUS_FILENAMES (MIT) - see the test below.
+    "taskmgr.exe",
+    "rundll32.exe",
+    "dllhost.exe",
+    "conhost.exe",
+    "taskhost.exe",
 ];
 
 /// Ports strongly associated with remote-control software, used to label listeners
@@ -440,6 +454,40 @@ mod tests {
             connection_severity(true, Location::AppData, false),
             Some(Severity::Med)
         );
+    }
+
+    #[test]
+    fn masquerade_covers_the_names_malware_hides_behind() {
+        // The list started from the processes a user sees in Task Manager and was extended
+        // from kudu's SUSPICIOUS_FILENAMES table (MIT), which collects the same idea
+        // independently. The four added were missing and matter in practice:
+        // `taskmgr.exe` because it is the very tool someone opens to hunt an intruder,
+        // and `rundll32.exe`, `dllhost.exe` and `conhost.exe` because all three are
+        // legitimate System32 binaries that are also standard hosts for a hostile payload,
+        // so a copy of any of them outside `%SystemRoot%` has no innocent reading.
+        const HOSTILE: &str = r"C:\Users\bob\AppData\Local\Temp\x.exe";
+
+        for name in [
+            "taskmgr.exe",
+            "rundll32.exe",
+            "dllhost.exe",
+            "conhost.exe",
+            "taskhost.exe",
+        ] {
+            // Outside %SystemRoot%: a finding.
+            assert!(
+                looks_masquerading(name, HOSTILE, r"C:\Windows"),
+                "{name} outside %SystemRoot% must be treated as masquerading"
+            );
+
+            // In its real home: not a finding. These are system binaries that run from
+            // System32 on every machine, and reporting them would be pure noise.
+            let real = format!(r"C:\Windows\System32\{name}");
+            assert!(
+                looks_masquerading(name, &real, r"C:\Windows").eq(&false),
+                "{name} in System32 must not be reported"
+            );
+        }
     }
 
     #[test]

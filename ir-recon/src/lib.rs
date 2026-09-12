@@ -17,6 +17,7 @@ pub mod logaudit;
 pub mod model;
 pub mod monitor;
 pub mod remediate;
+pub mod remote_tools;
 pub mod report;
 pub mod rules;
 pub mod signatures;

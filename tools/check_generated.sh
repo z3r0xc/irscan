@@ -34,3 +34,14 @@ else
     diff .irscan-generated-1.rs .irscan-generated-2.rs | head -n 20
     exit 1
 fi
+
+# The other generator, checked the same way: regenerate from the vendored rules and
+# compare against the file that is committed. A checked-in generated file that no longer
+# matches its source is a file that will be edited by hand and never regenerated.
+echo "checking remote_tools.rs against its source..."
+if python tools/gen_remote_tools.py --check; then
+    :
+else
+    echo "FAIL: ir-recon/src/remote_tools.rs is out of date; run tools/gen_remote_tools.py"
+    exit 1
+fi
