@@ -239,13 +239,24 @@ impl ScanContext {
     }
 
     pub fn raw_section(&mut self, section: impl Into<String>, lines: Vec<String>) {
-        self.raw.push((
-            section.into(),
-            lines
-                .into_iter()
-                .map(|l| crate::text::sanitize(&l, MAX_STRING))
-                .collect(),
-        ));
+        let section = section.into();
+        let mut lines: Vec<String> = lines
+            .into_iter()
+            .map(|l| crate::text::sanitize(&l, MAX_STRING))
+            .collect();
+
+        // An empty section is ambiguous: it can mean "this check ran and found nothing" or
+        // "this check could not run". Those are opposite conclusions from identical output,
+        // and a reader cannot tell which they are looking at. Sections are therefore never
+        // allowed to be empty - the writer states the fact instead. Collectors that know
+        // *why* a section is empty add their own line first; this is the floor.
+        if lines.is_empty() {
+            lines.push(format!(
+                "{section} was empty - the check produced no lines (see WARNINGS for a check that could not run)"
+            ));
+        }
+
+        self.raw.push((section, lines));
     }
 
     pub fn process_name(&self, pid: u32) -> Option<&str> {

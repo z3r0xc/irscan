@@ -97,6 +97,15 @@ impl Collector for TasksCollector {
             ctx.tasks.push(record);
         }
 
+        if lines.is_empty() {
+            // The store exists but nothing was read from it, which is what happens without
+            // elevation. Saying so here keeps "no tasks" and "could not look" apart.
+            lines.push(
+                "no task definition was read; without elevation the task store is unreadable, \
+                 so this is not evidence that no task exists"
+                    .to_string(),
+            );
+        }
         ctx.raw_section("SCHEDULED TASKS", lines);
         Ok(())
     }

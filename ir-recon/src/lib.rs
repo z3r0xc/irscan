@@ -13,6 +13,7 @@
 
 pub mod collect;
 pub mod known_services;
+pub mod logaudit;
 pub mod model;
 pub mod monitor;
 pub mod remediate;

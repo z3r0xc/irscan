@@ -155,14 +155,23 @@ impl EvtIter {
         Ok(())
     }
 
-    /// The next event handle, or `None` at the end of the resultset.
+    /// The next event, or `None` at the end of the resultset.
     ///
-    /// `ERROR_NO_MORE_ITEMS` is a clean end and is mapped to `None`; every other
-    /// failure is reported as an error rather than silently truncating the scan.
-    fn next_event(&mut self) -> Result<Option<EVT_HANDLE>, String> {
+    /// Returns the **owned guard**, not a bare handle, and that is the whole point: the
+    /// caller renders the event after this function returns, and the next call to
+    /// `next_batch` closes every handle in the batch before refilling it. Handing out a
+    /// bare handle would leave the caller rendering a handle that had just been closed,
+    /// which fails with `ERROR_INVALID_HANDLE` (6) and - because the caller skips an
+    /// event it cannot render - silently reports an empty channel. That was a real
+    /// false negative across four checks, so the type now makes the lifetime explicit:
+    /// the guard travels to the caller and is dropped only when the caller is done.
+    ///
+    /// `ERROR_NO_MORE_ITEMS` is a clean end and is mapped to `None`; every other failure
+    /// is reported as an error rather than silently truncating the scan.
+    fn next_event(&mut self) -> Result<Option<OwnedEvt>, String> {
         loop {
             if let Some(ev) = self.batch.pop() {
-                return Ok(Some(ev.raw()));
+                return Ok(Some(ev));
             }
             match self.next_batch() {
                 Ok(()) => {}
@@ -307,11 +316,11 @@ pub fn query(channel: &str, xpath: &str, max: usize) -> Result<Vec<RawEvent>, St
 
     while out.len() < want {
         match iter.next_event()? {
-            // `next_event` yields the raw handle; it stays owned by `iter`'s batch,
-            // which `next_event` drops on the following call, so nothing leaks and
-            // nothing is closed twice.
-            Some(handle) => {
-                let xml = match render_event_xml(handle) {
+            // The guard owns the handle for as long as it is alive here, so the render
+            // below cannot outlive it. Nothing leaks: it is dropped at the end of this
+            // arm, and the batch that produced it is refilled only on the next call.
+            Some(event_handle) => {
+                let xml = match render_event_xml(event_handle.raw()) {
                     Ok(x) => x,
                     // One unrenderable event must not discard the events already
                     // collected: skip it and keep going.
@@ -418,6 +427,37 @@ mod tests {
         let terminated = [0x48u8, 0x00, 0x00, 0x00, 0x69, 0x00];
         assert_eq!(decode_event_xml(&terminated, 6), "H");
         assert_eq!(decode_event_xml(&[], 0), "");
+    }
+
+    #[test]
+    fn the_event_iterator_hands_out_an_owned_guard_not_a_bare_handle() {
+        // This is the regression test for a silent false negative that emptied four
+        // checks at once: the iterator used to return `ev.raw()`, and the next batch
+        // refill dropped every guard - including the one whose handle the caller was
+        // still rendering. `EvtRender` then failed with ERROR_INVALID_HANDLE and the
+        // caller skipped the event, so a channel with events looked empty.
+        //
+        // The fix is a type, so the test asserts the type's presence in the signature:
+        // `next_event` must not be able to produce a bare handle.
+        let source = include_str!("events.rs");
+        let signature_line = source
+            .lines()
+            .find(|l| l.contains("fn next_event("))
+            .unwrap_or("");
+        assert!(
+            signature_line.contains("Option<OwnedEvt>"),
+            "next_event must return the guard, not EVT_HANDLE: {signature_line}"
+        );
+        assert!(
+            !signature_line.contains("EVT_HANDLE"),
+            "a bare handle here is the defect: {signature_line}"
+        );
+
+        // And the caller must render through the guard rather than the raw value.
+        assert!(
+            source.contains("render_event_xml(event_handle.raw())"),
+            "the render must go through the guard"
+        );
     }
 
     #[test]

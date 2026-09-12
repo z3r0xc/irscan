@@ -61,6 +61,14 @@ const MAX_BURST_ITEMS: usize = 12;
 /// fields, which is what a reader actually cares about.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventFields {
+    /// `EventRecordID`. Windows numbers records sequentially per channel, which is what
+    /// makes a missing number meaningful: it means a record was removed. Read by
+    /// `logaudit`, which is the only reason this tool can see a deleted event.
+    pub record_id: u64,
+    /// `TimeCreated/@SystemTime`, as seconds since the Unix epoch. `None` when the
+    /// attribute is missing or unparseable, which is treated as "no time" rather than as
+    /// the epoch - a wrong timestamp would invent a silence that never happened.
+    pub time_epoch: Option<i64>,
     /// `<EventID>`; `0` when absent or unparseable.
     pub event_id: u32,
     /// `SystemTime` attribute of `<TimeCreated>`, verbatim.
@@ -82,6 +90,63 @@ impl EventFields {
     pub fn value(&self, name: &str) -> Option<&str> {
         field(self, name)
     }
+}
+
+/** Parse the ISO-8601 timestamp Windows writes into `TimeCreated/@SystemTime`, e.g.
+ * `2026-09-12T12:12:30.9060987Z`, into seconds since the Unix epoch. UTC only: the
+ * attribute always carries a `Z`, and a local-time guess would be wrong by the offset.
+ *
+ * Fractional seconds are ignored on purpose - the audit compares gaps of hours.
+ * Returns `None` for anything it does not fully understand, so a malformed timestamp can
+ * never be mistaken for a real one. */
+pub fn parse_system_time(value: &str) -> Option<i64> {
+    let text = value.trim();
+    let (date, rest) = text.split_once('T')?;
+    let rest = rest.trim_end_matches('Z');
+    let time = match rest.split_once('.') {
+        Some((whole, _fraction)) => whole,
+        None => rest,
+    };
+
+    let mut date_parts = date.split('-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: i64 = date_parts.next()?.parse().ok()?;
+    let day: i64 = date_parts.next()?.parse().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+
+    let mut time_parts = time.split(':');
+    let hour: i64 = time_parts.next()?.parse().ok()?;
+    let minute: i64 = time_parts.next()?.parse().ok()?;
+    let second: i64 = time_parts.next()?.parse().ok()?;
+    if time_parts.next().is_some() {
+        return None;
+    }
+
+    // Stated as the accepted ranges rather than as a chain of negations: the caller wants
+    // to know whether this is a real timestamp, and a positive test reads that way.
+    let plausible = (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && (0..=23).contains(&hour)
+        && (0..=59).contains(&minute)
+        && (0..=60).contains(&second);
+    if !plausible {
+        return None;
+    }
+
+    Some(days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second)
+}
+
+/// Days since 1970-01-01 for a proleptic Gregorian date. Howard Hinnant's algorithm.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 /// Case-insensitive lookup of a named `<Data>` value.
@@ -128,10 +193,17 @@ pub fn parse_event_xml(xml: &str) -> Option<EventFields> {
 
     // TimeCreated carries SystemTime as an attribute.
     if let Some(tag) = find_open_tag(xml, "TimeCreated") {
-        out.time_created = tag
+        let raw = tag
             .attribute("SystemTime")
             .map(unescape)
             .unwrap_or_default();
+        out.time_epoch = parse_system_time(&raw);
+        out.time_created = raw;
+    }
+
+    // EventRecordID: the sequential number that makes a missing record meaningful.
+    if let Some(raw) = element_text(xml, "EventRecordID") {
+        out.record_id = raw.trim().parse::<u64>().unwrap_or(0);
     }
 
     out.channel = element_text(xml, "Channel").unwrap_or_default();
@@ -524,6 +596,7 @@ impl Collector for EventsCollector {
         failed_logons(ctx);
         defender_history(ctx);
         task_registration(ctx);
+        audit_channels(ctx);
         Ok(())
     }
 }
@@ -547,24 +620,136 @@ fn collect_channel(
     let events = match crate::win::events::query(channel, xpath, max) {
         Ok(events) => events,
         Err(e) => {
+            // The section is written even when the channel cannot be read, and it says so.
+            // An absent or empty section is indistinguishable from "this channel was
+            // checked and is clean", which is precisely the false negative to avoid: on
+            // this host `Security` needs elevation, and a silent scan would have reported
+            // an unread logon history as no logons at all.
             ctx.warn(format!("events: {channel} unavailable: {e}"));
+            ctx.raw_section(
+                section,
+                vec![format!(
+                    "not examined - the channel could not be read ({e}); this is not a clean result"
+                )],
+            );
             return None;
         }
     };
 
     let mut lines: Vec<String> = Vec::new();
     let mut parsed: Vec<EventFields> = Vec::new();
+    let mut unparsed = 0usize;
     for event in &events {
         if lines.len() < MAX_RAW_LINES {
             lines.push(sanitize(&event.xml, MAX_DATA_VALUE));
         }
-        if let Some(fields) = parse_event_xml(&event.xml) {
-            parsed.push(fields);
+        match parse_event_xml(&event.xml) {
+            Some(fields) => parsed.push(fields),
+            None => unparsed += 1,
         }
+    }
+
+    if events.is_empty() {
+        // Empty is a real result, and it is stated as one so it cannot be mistaken for a
+        // channel that was never queried.
+        lines.push(format!(
+            "examined: {channel} matched nothing for the query {xpath}"
+        ));
+    } else {
+        lines.push(format!(
+            "examined {} event(s) for {xpath}; {} parsed, {} unparseable",
+            events.len(),
+            parsed.len(),
+            unparsed
+        ));
+    }
+    if events.len() >= max {
+        lines.push(format!(
+            "the query returned the limit of {max}; older events were not examined"
+        ));
     }
 
     ctx.raw_section(section, lines);
     Some(parsed)
+}
+
+/// Read each auditable channel once and look for holes in it.
+///
+/// The query is deliberately wider than the other checks (all events, not one id) because
+/// a gap can only be seen in a sequence: auditing `*[EventID=7045]` alone would miss a gap
+/// between two records that are not 7045 at all.
+fn audit_channels(ctx: &mut ScanContext) {
+    // The audit reports what it examined, not only what it found. "Nothing missing" and
+    // "the channel could not be read" look identical in a findings list, and conflating
+    // them is the false negative this tool exists to avoid - so the section always says
+    // which of the two happened.
+    for channel in [CHANNEL_SECURITY, CHANNEL_SYSTEM] {
+        // Per channel, not shared: a section that names `System` while showing `Security`'s
+        // counts is worse than an empty one, because it looks like evidence.
+        let mut report: Vec<String> = Vec::new();
+        let section = format!("{channel} RECORD SEQUENCE AUDIT");
+        // A message we cannot read is reported by `collect_channel` as a warning; here we
+        // only need to record that the channel was skipped.
+        let events = match crate::win::events::query(channel, "*", crate::logaudit::MAX_RECORDS) {
+            Ok(events) => events,
+            Err(e) => {
+                report.push(format!(
+                    "{channel}: not audited - the channel could not be read ({e})"
+                ));
+                ctx.warn(format!("events: {channel} not audited: {e}"));
+                ctx.raw_section(section, report.clone());
+                continue;
+            }
+        };
+
+        let parsed: Vec<EventFields> = events
+            .iter()
+            .filter_map(|event| parse_event_xml(&event.xml))
+            .collect();
+        let with_ids = parsed.iter().filter(|f| f.record_id > 0).count();
+
+        let records: Vec<crate::logaudit::Record> = parsed
+            .iter()
+            .filter(|f| f.record_id > 0)
+            .map(|f| crate::logaudit::Record {
+                id: f.record_id,
+                time: f.time_epoch.unwrap_or(0),
+            })
+            .collect();
+
+        report.push(format!(
+            "{channel}: {with_ids} event(s) examined for gaps in the record numbering"
+        ));
+
+        if records.len() < crate::logaudit::MIN_RECORDS_FOR_GAP {
+            report.push(format!(
+                "{channel}: too few records to judge (need {})",
+                crate::logaudit::MIN_RECORDS_FOR_GAP
+            ));
+        } else {
+            let gaps = crate::logaudit::find_gaps(channel, &records);
+            report.push(format!("{channel}: {} gap(s) in the numbering", gaps.len()));
+            if let Some(finding) = crate::logaudit::gaps_finding(channel, &gaps) {
+                ctx.add(finding);
+            }
+
+            let silences =
+                crate::logaudit::find_silences(channel, &records, crate::logaudit::SILENCE_SECONDS);
+            // Never a second copy of the threshold as a literal: the section used to say
+            // "6h" while applying 36h, which is worse than saying nothing, because the
+            // reader would then reason about gaps the check had not looked for.
+            report.push(format!(
+                "{channel}: {} stretch(es) of silence over {}",
+                silences.len(),
+                crate::logaudit::human_duration(crate::logaudit::SILENCE_SECONDS)
+            ));
+            if let Some(finding) = crate::logaudit::silence_finding(channel, &silences) {
+                ctx.add(finding);
+            }
+        }
+
+        ctx.raw_section(section, report.clone());
+    }
 }
 
 /// Severity for the `ImagePath` a 7045 event recorded.
@@ -1262,6 +1447,51 @@ mod tests {
         let fields = parse_event_xml(&xml).expect("fixture must parse");
         let value = field(&fields, "X").expect("X must be present");
         assert!(value.len() <= MAX_DATA_VALUE);
+    }
+
+    #[test]
+    fn the_record_id_and_the_timestamp_are_extracted() {
+        // Both are properties of a genuine event, taken from this machine's System log.
+        let xml = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Volsnap'/><EventID Qualifiers='16390'>33</EventID><TimeCreated SystemTime='2026-09-12T12:12:30.9060987Z'/><EventRecordID>8092</EventRecordID><Channel>System</Channel></System></Event>"#;
+        let fields = parse_event_xml(xml).expect("fixture must parse");
+        assert_eq!(fields.record_id, 8092);
+        assert_eq!(fields.event_id, 33);
+        assert_eq!(fields.time_epoch, Some(1_789_215_150));
+    }
+
+    #[test]
+    fn a_malformed_timestamp_is_no_timestamp_rather_than_the_epoch() {
+        // A guessed time would invent a silence of fifty years and report it as evidence.
+        for bad in [
+            "",
+            "not a date",
+            "2026-09-12",
+            "2026-13-01T00:00:00Z",
+            "2026-09-12T25:00:00Z",
+            "2026-09-12T12:12:30+03:00",
+            "T12:12:30Z",
+        ] {
+            assert_eq!(parse_system_time(bad), None, "accepted {bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_timestamp_parser_handles_the_shapes_windows_writes() {
+        // With and without fractional seconds, and the leap day.
+        assert_eq!(parse_system_time("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_system_time("1970-01-01T00:00:01Z"), Some(1));
+        assert_eq!(
+            parse_system_time("2000-02-29T00:00:00.0000000Z"),
+            Some(951_782_400)
+        );
+        assert_eq!(
+            parse_system_time("2026-09-12T12:12:30Z"),
+            Some(1_789_215_150)
+        );
+        assert_eq!(
+            parse_system_time(" 2026-09-12T12:12:30.5Z "),
+            Some(1_789_215_150)
+        );
     }
 
     #[test]
