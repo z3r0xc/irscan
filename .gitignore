@@ -20,3 +20,9 @@ IR-Report-*.txt
 *.ilk
 *.rcgu.o
 NUL*
+
+# Local scratch: hand-built test binaries and elevated-run output.
+/ir-recon/target/manifesttest/
+/elevated-report/
+err.txt
+pr-body.md

@@ -2,15 +2,34 @@
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="IRScan.app" />
 
-  <!-- asInvoker: the program elevates ITSELF at startup (ShellExecute "runas"),
-       so that it also runs - with reduced coverage and a clear warning - when
-       elevation is declined, and so the binary can be smoke-tested without UAC.
-       To force an OS-level UAC prompt instead, change level to
-       "requireAdministrator" and rebuild. -->
+  <!--
+    requireAdministrator, and the reasoning matters because the alternative is
+    tempting.
+
+    This tool exists to answer "is this machine compromised?", and an answer is only
+    as good as the evidence behind it. Without elevation the Security event log is
+    unreadable (Win32 error 5), Prefetch is unavailable, and protected processes
+    refuse to name their own image - three blind spots in exactly the places a hidden
+    agent leaves traces. An unelevated scan is not a smaller scan, it is a scan whose
+    clean result means less, and this tool's whole design is built on refusing that
+    ambiguity.
+
+    Declaring the level in the manifest rather than self-elevating through
+    ShellExecute "runas" changes what Windows shows the operator: the shield appears
+    on the icon and the prompt is raised by the OS before the process starts, so there
+    is no window in which the tool runs with less access than it needs. The
+    self-elevation path in `win::elevate` is kept because it remains the mechanism for
+    re-running from inside a session, and it is harmless here: `win::is_elevated`
+    reads the real token, so a process started under this manifest reports elevated
+    and never relaunches itself.
+
+    `uiAccess` stays false. It would let the tool send input to higher-integrity
+    windows, which a read-only triage tool must not be able to do.
+  -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
@@ -19,8 +38,18 @@
     <application>
       <!-- Windows 10 / 11 -->
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
-      <!-- Windows 8.1 -->
-      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" />
     </application>
   </compatibility>
+
+  <!--
+    The tool draws its own monochrome interface and enables virtual-terminal
+    processing itself, so it needs no manifest for that. It DOES need to be told it is
+    DPI-aware, or Windows bitmap-stretches the console on a scaled display and the
+    right-aligned column of the verdict block wraps.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
 </assembly>

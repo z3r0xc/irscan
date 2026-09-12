@@ -191,6 +191,29 @@ with fixtures. The FFI layer is a thin, boring shim with no business rules in it
 6. Structure sizes come from `size_of::<T>()`, never a hard-coded constant.
 7. Struct layouts follow the SDK definitions exactly; no manual `#[repr]` guesses.
 
+### 6.0 The manifest is part of the build, not a file beside it
+
+`app.manifest` requests `requireAdministrator`, and `build.rs` passes two linker arguments
+to embed it. Both arguments are load-bearing and both failures were hit while wiring this
+up, so they are recorded rather than rediscovered:
+
+* `/MANIFEST:EMBED` is what makes the linker write a manifest resource at all.
+  `/MANIFESTUAC` alone sets the value and produces no resource, so the binary quietly kept
+  running as an ordinary process. The check is mechanical: the image has no `.rsrc`
+  section. Note that in this repository `app.manifest` existed for a while with nothing
+  passing it to the linker - a file that reads as a guarantee and provides none.
+* The values must be single-quoted (`level='requireAdministrator'`). Without the quotes
+  mt.exe emits `level=requireAdministrator` as bare XML, Windows refuses to start the
+  program with "its side-by-side configuration is incorrect", and the error names neither
+  the manifest nor the tool. A quoted *fragment* is equally wrong through
+  `-C link-arg=`: the double quotes reach mt.exe literally and end up inside the attribute
+  name.
+
+`tests/manifest.rs` and the `tests::` module in `lib.rs` assert the emitted arguments, not
+the file's prose. The first version of that test checked the whole of `build.rs` with
+`contains`, and it passed with the flag deleted, because the explanation in a comment still
+contained the string. A test a comment can satisfy asserts nothing.
+
 ## 6.1 Content scanning (YARA)
 
 `collect/yara.rs` adds the one axis the rest of the tool lacks: what is *inside* a file,

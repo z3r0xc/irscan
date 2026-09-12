@@ -53,6 +53,8 @@ fn main() {
     println!("cargo:rerun-if-changed={}", cert_path.display());
     println!("cargo:rerun-if-changed=build.rs");
 
+    embed_manifest(&manifest_dir);
+
     let raw = match fs::read_to_string(&db_path) {
         Ok(v) => v,
         Err(e) => panic!("cannot read {}: {e}", db_path.display()),
@@ -386,4 +388,64 @@ fn escape(s: &str) -> String {
         }
     }
     o
+}
+
+/// Embed `app.manifest` into the executable's resources.
+///
+/// Windows reads the manifest to decide the requested privilege level, so this is not
+/// cosmetic: without it the binary is treated as an ordinary `asInvoker` program, the UAC
+/// prompt never appears, and the scan silently loses the Security event log, Prefetch and
+/// the image paths of protected processes - the three places a hidden agent leaves traces.
+/// Wiring it here rather than relying on a checked-in `.manifest` file also means a broken
+/// manifest fails the build instead of producing a binary that looks fine and asks for
+/// nothing.
+///
+/// `rustc-link-arg-bins` applies to the binary targets only, so the test harness is
+/// unaffected.
+fn embed_manifest(manifest_dir: &str) {
+    let path = Path::new(manifest_dir).join("app.manifest");
+    let text = match fs::read_to_string(&path) {
+        Ok(v) => v,
+        Err(e) => panic!("cannot read {}: {e}", path.display()),
+    };
+
+    // A manifest that is not well-formed XML is ignored by the OS without an error, which
+    // would leave a binary that requests nothing while appearing correct. Check the pieces
+    // that carry the meaning rather than trusting the file's presence.
+    if !text.contains("<assembly") || !text.contains("</assembly>") {
+        panic!("{} is not an assembly manifest", path.display());
+    }
+    if !text.contains("requestedExecutionLevel") {
+        panic!(
+            "{} no longer documents a requested execution level; if the level moved out of \
+             the XML, this check and the /MANIFESTUAC argument must move with it",
+            path.display()
+        );
+    }
+
+    // Both arguments are required, and neither is obvious.
+    //
+    // `/MANIFEST:EMBED` is what makes the linker write a manifest resource at all.
+    // `/MANIFESTUAC` alone sets the value but produces no resource, so the binary keeps
+    // running as an ordinary process and no UAC prompt ever appears - measured by building
+    // the same program with and without it and finding no `.rsrc` section in the latter.
+    //
+    // The single quotes around each value are required by the linker's grammar, and the
+    // first attempt at this got it wrong in a way worth recording: omitting them makes
+    // mt.exe emit `<requestedExecutionLevel level=requireAdministrator uiAccess=false />`,
+    // which is not well-formed XML. Windows then refuses to start the program with "its
+    // side-by-side configuration is incorrect" - not the elevation prompt, and not an
+    // error that names the manifest. A quoted *fragment* is equally wrong: the docs allow
+    // `/MANIFESTUAC:"level='x' uiAccess='false'"`, but through `-C link-arg=` the double
+    // quotes reach mt.exe literally and land inside the attribute name. The form below is
+    // the one that produces a valid `<requestedExecutionLevel level='requireAdministrator'
+    // uiAccess='false' />`.
+    //
+    // `uiAccess=false` keeps the tool unable to send input to higher-integrity windows,
+    // which a read-only triage tool must never be able to do.
+    println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
+    println!(
+        "cargo:rustc-link-arg-bins=/MANIFESTUAC:level='requireAdministrator' uiAccess='false'"
+    );
+    println!("cargo:rerun-if-changed={}", path.display());
 }

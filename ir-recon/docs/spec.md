@@ -35,7 +35,21 @@ A **single-file, read-only** Windows endpoint triage tool that:
 
 ## 4. Users and usage
 
-One user, running elevated, on the machine under suspicion:
+One user, running elevated, on the machine under suspicion.
+
+Elevation is mandated by the binary's own manifest (`app.manifest` carries
+`requestedExecutionLevel level="requireAdministrator"`), so Windows raises the
+prompt and shows the shield on the icon before the process starts. This is a
+requirement rather than a preference for one reason: an unelevated scan cannot read the
+`Security` event log, Prefetch, or the image path of protected processes, and those are
+exactly where a hidden agent leaves traces. An unelevated report is not a smaller
+report, it is one whose clean verdict means less - and this tool is built on refusing
+that ambiguity. The runtime self-elevation path in `win::elevate` is retained for
+re-running from inside a session; it is inert under the manifest because
+`win::is_elevated` reads the real token. `--no-elevate` suppresses that retry and cannot
+bypass the prompt.
+
+
 
 ```
 irscan.exe                     full scan: styled console view + plain text report
