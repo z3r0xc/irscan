@@ -177,6 +177,14 @@ with fixtures. The FFI layer is a thin, boring shim with no business rules in it
    larger buffer handles the race where the required size grew in between.
 3. Every returned handle is closed on every path, including error paths, via small RAII guards
    (`OwnedHandle`, `OwnedRegKey`, `OwnedEvt`).
+3.1 **A guard outlives every use of the handle it owns.** An iterator that batches handles
+   must hand the caller the *guard*, not the raw handle, whenever the caller uses the handle
+   after the iterator returns. `EvtIter` violated this and the cost was four silent false
+   negatives: it returned `ev.raw()`, the next refill ran `batch.clear()` and closed that
+   handle, and the caller - which was about to render it - got `ERROR_INVALID_HANDLE` and
+   skipped the event as unrenderable. The type now carries the rule
+   (`Result<Option<OwnedEvt>, String>`), so the compiler enforces what a comment did not.
+   The general form: **ownership that a comment describes is ownership that will be broken.**
 4. `HANDLE` in windows-sys 0.61 is `*mut c_void` (verified against docs.rs); handles start as
    `ptr::null_mut()` and are compared against `INVALID_HANDLE_VALUE` where the API documents it.
 5. Strings are converted lossily and NUL-trimmed; nothing panics on malformed UTF-16.
@@ -290,6 +298,24 @@ Two consequences are deliberate:
 - `unsafe` is explicit and auditable — the property you want in a tool that calls raw Win32 with
   attacker-influenced sizes and lengths.
 - `cargo test`, `clippy` and `fmt` give deterministic, scriptable verification for CI.
+
+## 8.1 Report completeness
+
+A triage report is read to answer one question - "is this machine clean?" - and the answer is
+only trustworthy if every check says which of three things happened: it ran and found
+something, it ran and found nothing, or it did not run. The three are indistinguishable in a
+findings list, and the third is the dangerous one because it looks like the second.
+
+Two mechanisms enforce the distinction:
+
+1. `ScanContext::raw_section` refuses to write an empty section. A section with no lines gets
+   one that says so, so "empty" can never be read as "clean".
+2. Collectors that know why a check could not run say so in the section itself, naming the
+   cause: `Security: not audited - the channel could not be read (Win32 error 5)`.
+
+Verified on this host: a scan without elevation produces 23 sections, none of them empty, and
+the three `Security` checks each state they were not examined. The equivalent CLI warnings
+appear under `WARNINGS (checks that could not run - the report is incomplete)`.
 
 ## 9. Explicit limitations (honesty section)
 

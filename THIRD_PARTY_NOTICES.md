@@ -93,11 +93,38 @@ Copyleft projects are listed precisely because code must NOT be taken from them.
 | [WithSecureLabs/chainsaw](https://github.com/WithSecureLabs/chainsaw) | **GPL-3.0** | Reference for EVTX/DFIR structure | **none - licence forbids it** |
 | [mthcht/LOLRMM](https://github.com/mthcht/LOLRMM) | Apache-2.0 | Superseded by the canonical upstream above | none |
 
-### Why the copyleft entries matter
+### Licence decision: the copyleft restriction has been lifted
 
-`hayabusa` (AGPL-3.0) and `chainsaw` (GPL-3.0) are excellent work and were read for
-approach only. Incorporating their code into this MIT/Apache-2.0 project would
-relicense the whole binary under a copyleft licence. They are therefore listed as
-references with an explicit "no code copied" marker, and any future contribution that
-draws on them must either stay out of the build or change this project's licence
-first.
+**Recorded 2026-09-12 by the project owner**, in these words: *"нам похуй на лицензию,
+бери код и идею из них / продукт будет все равно открытым"*. The project is open source,
+and the owner has accepted that taking copyleft code relicenses the whole project under a
+copyleft licence. The previous policy - "copyleft projects are listed precisely because
+code must NOT be taken from them" - no longer applies, and the table above is superseded
+by the one below.
+
+What the lift changes, and what it does not:
+
+| | Before | After |
+|---|---|---|
+| Data from GPL/AGPL projects (rule corpora, hash lists, keyword sets) | not usable | usable |
+| Logic from GPL/AGPL projects | not usable | usable, but still has to be ported |
+| This project's licence | MIT/Apache-2.0 | follows whatever copyleft code is actually taken |
+
+The practical limit is unchanged and is technical rather than legal: **C, PowerShell and
+TypeScript cannot drop into a Rust crate.** Data can be vendored verbatim; logic has to be
+re-implemented, and is only worth porting when it is small. **Prefer data over logic.**
+
+Every item taken under the new policy must be added to the table below with its source,
+licence and what was taken, so the licence obligation stays visible.
+
+### Taken under the lifted policy
+
+| Item | Source | Licence | What was taken |
+|---|---|---|---|
+| Record-sequence gap detection | [WithSecureLabs/chainsaw](https://github.com/WithSecureLabs/chainsaw) `src/analyse/gaps.rs` | GPL-3.0 | **The idea only.** No code was copied: `ir-recon/src/logaudit.rs` is an independent Rust implementation of "a hole in a sequential record id is evidence of deletion". Recorded here because the idea is theirs and attribution is cheap. |
+
+### Considered and rejected on capability, not licence
+
+| Item | Why not |
+|---|---|
+| `Get-RidHijacking` in PersistenceSniper (`PersistenceSniper.psm1:1878`) | It reaches COM-hijackable registrations by escalating to SYSTEM via `ElevateTo-System` (`:457`). A read-only triage tool must not raise its own privileges to look at something; this is a design refusal and does not change with the licence. |

@@ -107,6 +107,10 @@ Each requirement is testable; the right column names the automated check.
 | FR-45 | The interface is available in Russian and English, chosen from the system language, with every visible string in one dictionary so it can be found and corrected | `RU`/`EN` dictionaries, `t(key, params)` |
 | FR-46 | Localisation must not change the layout: the frame geometry is identical before and after the text arrives, and a label that does not fit is shortened rather than allowed to break the layout | measured header height, delta box, footer position at 1280x800 |
 | FR-47 | Interface text is translated; data from the machine never is. A service name, path or evidence line is shown exactly as collected | `groups`, `evidence`, `raw` rendered verbatim |
+| FR-48 | The audit examines absence, not only presence: a channel's record numbering is checked for holes, because deleting the records that describe an action is how an operator hides it | `logaudit::find_gaps`, `a_hole_in_the_numbering_is_reported` |
+| FR-49 | A read that failed is reported as a failed read, never as an empty result. `Security` needs elevation, so without it the logon checks must say "not examined", because an unreadable logon history and a machine with no logons produce identical findings otherwise | `collect_channel` writes `not examined - the channel could not be read`; `ScanContext::raw_section` cannot write an empty section |
+| FR-50 | A report section always states what was examined - how many records, how many parsed, and whether a cap was reached - so a check that ran and found nothing is distinguishable from one that did not run | `examined N event(s) ... M parsed, K unparseable` |
+| FR-51 | A binary in a transit directory is judged on its location, not on its signature, because the signature-check budget is finite and an unchecked file must not be indistinguishable from a trusted one. `None` means "not verified", never "verified good" | `finding_reason` returns High for `Location::Drop` whenever `trust != Some(true)` |
 
 ### 5.1 Presentation surfaces
 
@@ -205,6 +209,27 @@ Stable field names; additive changes only, guarded by `json_schema_*` tests.
   contains no duplicate names and no entry without a safety rating.
 
 ## 10. Test plan (TDD)
+
+### 10.1 Regression: the event reader returned nothing
+
+`win::events::query` returned zero events for every channel and every query, in the same
+process where the raw Win32 calls returned a 1104-byte event. Cause: `EvtIter::next_event`
+handed out `ev.raw()`, a bare `EVT_HANDLE`, while the next `next_batch` call ran
+`self.batch.clear()` - dropping the guard that owned that handle. The caller then rendered a
+closed handle, `EvtRender` failed with Win32 error 6 (`ERROR_INVALID_HANDLE`), and the
+caller skipped the event because it could not render it. Four checks - `Security`, RDP
+logon 4624 type 10, service install 7045 and Defender - were therefore reported clean while
+doing nothing at all.
+
+The fix makes the ownership a type: `next_event` returns `Option<OwnedEvt>`, so the guard
+travels to the caller and cannot be dropped by a refill it does not know about. Pinned by
+`the_event_iterator_hands_out_an_owned_guard_not_a_bare_handle`, which asserts the signature
+rather than the output, because a unit test cannot close a real event handle.
+
+**The lesson worth keeping**: a check that cannot run must fail loudly. This defect was
+invisible precisely because an unrenderable event was treated as an event that did not
+exist, and the fix for the visibility (FR-49, FR-50) is as important as the fix for the
+reader.
 
 - **Unit (majority)**: pure functions — path classification, masquerade detection, severity policy,
   environment expansion, private-IP classification, task-XML extraction, event-XML extraction,
