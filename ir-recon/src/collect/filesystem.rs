@@ -156,7 +156,31 @@ impl FilesystemCollector {
         let mut classified: Vec<Classified> = Vec::new();
         let mut signature_checks = 0usize;
 
-        for hit in hits {
+        // The verification budget is spent on what the verdict can actually change, and
+        // the order matters more than the size of the budget. `is_signature_trusted` is the
+        // only slow step here, so only `MAX_SIGNATURE_CHECKS` candidates get a verdict and
+        // the rest have `trust = None`. A transit-directory candidate is the one whose
+        // verdict decides between "reported" and "not reported" - application data needs
+        // the verdict only to separate MED from nothing - so transit candidates are
+        // verified first. Walking `hits` in its original order instead let ordinary
+        // per-user software consume the whole budget before `%TEMP%` was ever reached, and
+        // a dropped payload in `%TEMP%` was then silently cleared because its signature had
+        // never been checked.
+        let mut order: Vec<&FileHit> = hits.iter().collect();
+        order.sort_by_key(|hit| {
+            let path = hit.path.display().to_string();
+            let name = crate::text::basename(&path);
+            let location = classify_location(&path);
+            let transit = location == Location::Drop;
+            // Transit first, then candidates over non-candidates, then newest.
+            (
+                core::cmp::Reverse(transit),
+                core::cmp::Reverse(is_finding_extension(name) && !is_impersonating(name)),
+                hit.age_secs,
+            )
+        });
+
+        for hit in order {
             let safe_path = sanitize(&hit.path.display().to_string(), MAX_STRING);
             let safe_name = sanitize(crate::text::basename(&safe_path), MAX_STRING);
             ctx.note(HaystackKind::Path, safe_path.clone(), "recent executable");
@@ -196,6 +220,16 @@ impl FilesystemCollector {
                     });
                 }
             }
+        }
+
+        // The budget is finite, so say when it ran out. Without this a candidate whose
+        // signature was never checked is indistinguishable from one that passed, which is
+        // how the transit-directory rule came to depend on walk order in the first place.
+        if signature_checks >= MAX_SIGNATURE_CHECKS {
+            ctx.warn(format!(
+                "filesystem: signature verification stopped at {MAX_SIGNATURE_CHECKS} files; \
+                 executables listed after that point have no signature verdict"
+            ));
         }
 
         let mut hashes = 0usize;
@@ -365,6 +399,14 @@ pub fn finding_reason(
     if impersonating {
         return Some((Severity::High, Reason::Impersonation));
     }
+    // Note the direction of this test: it requires a *verdict*, `Some(false)`, and treats
+    // `None` as the absence of evidence it is. An earlier attempt inverted it to
+    // `trust != Some(true)` to stop the signature budget from hiding a dropped payload, and
+    // that was wrong twice over - it turned "not checked" into "checked and bad", and it
+    // flagged every legitimately signed installer in `%TEMP%` or `Downloads` as HIGH when
+    // the budget ran out. The budget is dealt with where it belongs, in `report_hits`,
+    // which now spends its slots on transit-directory candidates first so that `None` does
+    // not arise for the files this rule exists to catch.
     if trust == Some(false) && location == Location::Drop {
         return Some((Severity::High, Reason::UntrustedInDropLocation));
     }
@@ -557,6 +599,78 @@ fn epoch_secs(t: SystemTime) -> u64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_unchecked_signature_is_not_read_as_a_bad_one() {
+        // `trust = None` means the check did not run. Reading it as "untrusted" would flag
+        // every legitimately signed installer in %TEMP% and Downloads as HIGH once the
+        // verification budget ran out - the same false-positive direction that once produced
+        // 89 HIGH findings on a clean developer machine. A verdict is required.
+        assert_eq!(
+            finding_reason(false, None, Location::Drop, 3600),
+            None,
+            "not checked must not be reported as untrusted"
+        );
+        assert_eq!(
+            finding_reason(false, Some(true), Location::Drop, 3600),
+            None,
+            "a verified signature clears the location signal"
+        );
+        // A real negative verdict is what the rule is for.
+        assert_eq!(
+            finding_reason(false, Some(false), Location::Drop, 3600),
+            Some((Severity::High, Reason::UntrustedInDropLocation))
+        );
+    }
+
+    #[test]
+    fn the_signature_budget_is_spent_on_transit_directories_first() {
+        // `None` must not be treated as a verdict precisely because the budget runs out.
+        // The fix is to spend it where the verdict changes the outcome first, so this pins
+        // the ordering. The review's scenario: ordinary per-user software consumed all
+        // fifty slots before %TEMP% was reached, and a dropped payload was then cleared
+        // for having no verdict at all.
+        let hits = [
+            FileHit {
+                path: PathBuf::from(r"C:\ProgramData\vendor\app\one.exe"),
+                age_secs: 10,
+            },
+            FileHit {
+                path: PathBuf::from(r"C:\Users\bob\AppData\Local\vendor\two.exe"),
+                age_secs: 20,
+            },
+            FileHit {
+                path: PathBuf::from(r"C:\Users\bob\AppData\Local\Temp\dropped.exe"),
+                age_secs: 30,
+            },
+        ];
+        let mut order: Vec<&FileHit> = hits.iter().collect();
+        order.sort_by_key(|hit| {
+            let path = hit.path.display().to_string();
+            let name = crate::text::basename(&path).to_string();
+            let transit = classify_location(&path) == Location::Drop;
+            (
+                core::cmp::Reverse(transit),
+                core::cmp::Reverse(is_finding_extension(&name) && !is_impersonating(&name)),
+                hit.age_secs,
+            )
+        });
+        assert!(
+            order[0].path.ends_with("dropped.exe"),
+            "the transit candidate must be verified before the others, got {:?}",
+            order[0].path
+        );
+    }
+
+    #[test]
+    fn application_data_still_requires_a_failed_signature_check() {
+        // Only the transit-directory rule changed. Application data is where half the
+        // software on a developer machine lives, so an unverified binary there must NOT
+        // be reported on location alone - that was the 89-false-positive mistake.
+        assert_eq!(finding_reason(false, None, Location::AppData, 3600), None);
+        assert!(finding_reason(false, Some(false), Location::AppData, 3600).is_some());
+    }
+
     use super::*;
 
     #[test]
@@ -636,7 +750,9 @@ mod tests {
         assert_eq!(choco, Location::AppData);
         assert_eq!(finding_reason(false, Some(false), choco, 23 * DAY), None);
 
-        // An unsigned executable in %TEMP% is the one combination that is HIGH.
+        // An executable in %TEMP% with a *failed* signature check is HIGH. The verdict is
+        // what makes the location signal actionable; without one there is nothing to report,
+        // and the budget - not this rule - is what keeps that case rare.
         let temp = classify_location(r"C:\Users\bob\AppData\Local\Temp\a.exe");
         assert_eq!(temp, Location::Drop);
         assert_eq!(
@@ -649,9 +765,6 @@ mod tests {
             finding_reason(false, Some(false), Location::AppData, 3 * DAY),
             Some((Severity::Med, Reason::FreshUntrustedInAppData))
         );
-        // A signed binary in a transit directory is not reported: with no signature
-        // evidence there is nothing defensible to say about a signed installer cache.
-        assert_eq!(finding_reason(false, Some(true), Location::Drop, DAY), None);
 
         // A system-component name is HIGH wherever it sits.
         assert_eq!(
@@ -664,8 +777,11 @@ mod tests {
             finding_reason(false, Some(false), Location::Privileged, DAY),
             None
         );
-        // An unverified signature is not evidence on its own.
+        // An unverified signature is not evidence on its own in application data...
         assert_eq!(finding_reason(false, None, Location::AppData, DAY), None);
+        // ...and neither is it evidence in a transit directory. The budget makes an
+        // unchecked signature common there, so treating it as a verdict would flag every
+        // signed installer that runs out of %TEMP% - which is normal behaviour.
         assert_eq!(finding_reason(false, None, Location::Drop, DAY), None);
     }
 
