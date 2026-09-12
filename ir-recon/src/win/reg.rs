@@ -216,6 +216,49 @@ pub fn enum_values(root: RootKey, subkey: &str) -> Vec<(String, RegValue)> {
     }
 }
 
+/// Decode a registry value name.
+///
+/// `RegEnumValueW` returns the name as UTF-16 units, but a key written through the ANSI API
+/// can hold text whose *bytes* were stored verbatim and are then read back as units. On this
+/// host `HKCU\...\Run` contains exactly that: the bytes `57 69 6e 64 6f 77 73 ...` are
+/// `WindowsUpdateTask` packed two characters per unit, so the units decode as
+/// `楗摮睯啳摰瑡呥獡k` - and that is what this tool used to print, search for, and match against
+/// its signature database. The name is unsearchable for the operator and invisible to every
+/// check keyed on a process name, which is a silent hole at the one place an autostart entry
+/// lives.
+///
+/// The two encodings cannot be separated by the shape of the units - a UTF-16 name of even
+/// length also has zero high bytes, and the packed form above does not. They are separated by
+/// what decodes into readable text: the raw little-endian bytes are tried as UTF-8 first, and
+/// the UTF-16 reading survives whenever that fails or yields control characters. Guessing is
+/// safe in this direction because a real UTF-16 name of ASCII text decodes as UTF-8 only into
+/// `W\0i\0n\0...`, which the control-character test rejects.
+fn decode_value_name(buf: &[u16], len_chars: usize) -> String {
+    let wide = from_wide_len(buf, len_chars);
+
+    let units = len_chars.min(buf.len());
+    let units = buf[..units].iter().position(|c| *c == 0).unwrap_or(units);
+    let mut bytes: Vec<u8> = buf[..units].iter().flat_map(|u| u.to_le_bytes()).collect();
+    // A packed name ends with the terminator that `from_wide_len` would have stopped at,
+    // and it arrives here as a trailing zero *byte* rather than a zero unit.
+    while bytes.last() == Some(&0) {
+        bytes.pop();
+    }
+
+    match std::str::from_utf8(&bytes) {
+        // At least one alphanumeric character and nothing unprintable: that is text, not a
+        // UTF-16 read of the same bytes (which decodes into `W\0i\0n\0...`).
+        Ok(text)
+            if !text.is_empty()
+                && text.chars().any(|c| c.is_alphanumeric())
+                && text.chars().all(|c| !c.is_control()) =>
+        {
+            text.to_string()
+        }
+        _ => wide,
+    }
+}
+
 /// Enumerate the values of an already-open key.
 pub fn enum_values_of(key: &OwnedRegKey) -> Vec<(String, RegValue)> {
     let mut out = Vec::new();
@@ -227,8 +270,9 @@ pub fn enum_values_of(key: &OwnedRegKey) -> Vec<(String, RegValue)> {
         let mut kind: u32 = 0;
         let mut data_len: u32 = 0;
 
-        // SAFETY: the key is live; the name buffer is a valid out-buffer whose
-        // capacity is passed in `name_len`; a NULL data pointer asks for the size.
+        // The first call asks for the sizes: a NULL data pointer means "tell me how big".
+        // SAFETY: the key is live; the name buffer is a valid out-buffer whose capacity is
+        // passed in `name_len`; `data_len` receives the required size.
         let rc = unsafe {
             RegEnumValueW(
                 key.raw(),
@@ -256,16 +300,54 @@ pub fn enum_values_of(key: &OwnedRegKey) -> Vec<(String, RegValue)> {
             continue;
         }
 
-        // The default value has an empty name, which is meaningful: an unnamed Run
-        // value is a classic autostart trick, so it is kept, not skipped.
-        let name = from_wide_len(&name_buf, name_len as usize);
+        // Read the data in the same enumeration step rather than by looking the value up
+        // again. Two reasons, and the second is a real bug this code had: the second lookup
+        // has to name the value, and the name we hold is *decoded* - for a name whose stored
+        // bytes are not UTF-16 the decoded form is not the key's name, so the lookup returned
+        // nothing and every such value was reported empty.
+        if data_len > MAX_REG_BYTES {
+            out.push((
+                decode_value_name(&name_buf, name_len as usize),
+                RegValue::Other,
+            ));
+            index += 1;
+            continue;
+        }
 
-        let value = if data_len > MAX_REG_BYTES {
-            RegValue::Other
-        } else {
-            read_value(key, &name).unwrap_or(RegValue::Other)
+        let mut data_buf = vec![0u8; data_len as usize];
+        let mut kind_after: u32 = kind;
+        let mut data_len_after = data_len;
+        // `name_len` is an in/out parameter: on entry it must be the buffer's capacity in
+        // characters, not the length the previous call reported. Passing the reported length
+        // back in makes the API reject every name as too long and return
+        // ERROR_MORE_DATA for good, which emptied the whole enumeration.
+        let mut name_len_after = name_buf.len() as u32;
+        // SAFETY: the key is live; the name buffer's capacity is passed in
+        // `name_len_after`; `data_buf` is exactly `data_len` bytes as reported for this
+        // index; `data_len_after` receives what was written.
+        let rc = unsafe {
+            RegEnumValueW(
+                key.raw(),
+                index,
+                name_buf.as_mut_ptr(),
+                &mut name_len_after,
+                std::ptr::null_mut(),
+                &mut kind_after,
+                data_buf.as_mut_ptr(),
+                &mut data_len_after,
+            )
         };
-        out.push((name, value));
+        if rc != ERROR_SUCCESS {
+            index += 1;
+            continue;
+        }
+        data_buf.truncate(data_len_after as usize);
+        let name_len = name_len_after;
+
+        // The default value has an empty name, which is meaningful: an unnamed Run value is
+        // a classic autostart trick, so it is kept, not skipped.
+        let name = decode_value_name(&name_buf, name_len as usize);
+        out.push((name, decode(kind_after, &data_buf)));
         index += 1;
     }
 
@@ -437,6 +519,39 @@ pub fn key_exists(root: RootKey, subkey: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_value_name_whose_bytes_pair_up_into_units_is_recovered() {
+        // The real case, from this host's own `HKCU\...\Run`. Verified with .NET that the
+        // stored name bytes are `57 69 6e 64 6f 77 73 ...` - the ASCII of "WindowsUpdateTask"
+        // packed two characters per UTF-16 unit, which is what reading a UTF-8 name back in
+        // wide form produces. Decoded as UTF-16 it is `楗摮睯啳摰瑡呥獡k`.
+        let name = "WindowsUpdateTask";
+        let mut bytes = name.as_bytes().to_vec();
+        if bytes.len() % 2 == 1 {
+            bytes.push(0);
+        }
+        let as_units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from(c[0]) | (u16::from(c[1]) << 8))
+            .collect();
+
+        let recovered = decode_value_name(&as_units, as_units.len());
+        assert_eq!(recovered, name, "the packed name must be recovered in full");
+
+        // An ordinary UTF-16 name stays intact: the recovery must not corrupt the case the
+        // API documents.
+        let ordinary: Vec<u16> = "OneDrive".encode_utf16().collect();
+        assert_eq!(decode_value_name(&ordinary, ordinary.len()), "OneDrive");
+
+        // Non-ASCII UTF-16 is still UTF-16.
+        let cyrillic: Vec<u16> = "Обновление".encode_utf16().collect();
+        assert_eq!(decode_value_name(&cyrillic, cyrillic.len()), "Обновление");
+
+        // The default value's empty name stays empty.
+        assert_eq!(decode_value_name(&[], 0), "");
+    }
+
     use super::*;
 
     #[test]
