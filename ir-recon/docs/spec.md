@@ -90,6 +90,36 @@ Each requirement is testable; the right column names the automated check.
 | FR-28 | Reports progress per collector, to stderr, so a redirected stdout still receives a clean report | `progress_is_reported_for_every_collector_including_a_failing_one` |
 | FR-29 | A service Windows itself ships is recognised by name (including per-user `_hex` instance suffixes) so that an unsigned, unreadable or absent image on a system service is not reported as if it were an unknown agent | `known_services::lookup`, `per_user_suffixes_are_stripped`, `unknown_names_return_none_instead_of_a_guess` |
 | FR-30 | The known-service table is generated mechanically from its upstream source, and regenerating it is byte-identical | `tools/gen_known_services.py`, verified by re-running and comparing |
+| FR-31 | A desktop GUI runs **the same core in-process**. No scanning, matching or severity decision may be reimplemented in the UI: the GUI consumes the library and nothing else | `gui::commands::*` call `irscan::collect` / `irscan::signatures` / `irscan::rules` |
+| FR-32 | The GUI presents the same findings, verdict and warnings as the CLI, from the same `ScanContext`, and can write the same plain-text and JSON reports to disk | `gui::commands::view_report`, `export_report` |
+| FR-33 | A scan streams per-collector progress to the UI, so a long collector does not look like a hang | `collect::run_all_with` observer bridged to a Tauri event |
+| FR-34 | The palette is monochrome (black, grey, white). Severity must be distinguishable **without colour** - by glyph, weight and the tag itself | `ui::severity_marker`, GUI stylesheet contrast test |
+| FR-35 | The GUI performs no network access and spawns no shell. It reads only what the core returns | no `fetch`, no `Command` in the GUI |
+| FR-36 | The frontend is plain HTML/CSS/JS with no bundler and no npm dependency, and it renders correctly when its files are loaded directly | frontend loaded from disk in a browser during verification |
+| FR-37 | The CLI remains the documented path for a machine that may not have WebView2, and is never removed in favour of the GUI | `README.md` documents both |
+| FR-38 | Each scan is compared against the previous one on that machine, and the difference is reported: what appeared, what went away, and specifically whether anything appeared that a reboot would preserve | `monitor::diff`, `delta_reports_new_presence_only_for_persistent_things` |
+| FR-39 | Two observations count as the same thing when identity is stable across a restart: an image name, not a pid; a remote endpoint, not a local port; a name or path for anything persistent | `a_restarted_process_is_not_a_change`, `a_local_port_change_is_not_a_change` |
+| FR-40 | Stored history is re-validated on load and discarded rather than half-read when it is not a snapshot this version understands | `a_snapshot_from_another_version_is_refused_rather_than_misread`, `a_hostile_identity_cannot_forge_an_extra_entry` |
+| FR-41 | Two reversible containment actions are automated (disable a service, remove an autostart value); both are typed, never a command line, and both write an undo record before the first change | `remediate::undo_script`, `apply_autostart`, `write_undo_record` |
+| FR-42 | An action that is not automated says so explicitly instead of appearing to succeed | `unimplemented_actions_say_so_instead_of_pretending_to_succeed` |
+| FR-43 | Exporting a report is refused unless the cursor names the scan currently on screen | `an_export_for_a_different_scan_is_refused` |
+| FR-44 | A containment action that is not automated returns an explicit refusal naming what to do by hand, rather than a success | `unimplemented_actions_say_so_instead_of_pretending_to_succeed` |
+| FR-45 | The interface is available in Russian and English, chosen from the system language, with every visible string in one dictionary so it can be found and corrected | `RU`/`EN` dictionaries, `t(key, params)` |
+| FR-46 | Localisation must not change the layout: the frame geometry is identical before and after the text arrives, and a label that does not fit is shortened rather than allowed to break the layout | measured header height, delta box, footer position at 1280x800 |
+| FR-47 | Interface text is translated; data from the machine never is. A service name, path or evidence line is shown exactly as collected | `groups`, `evidence`, `raw` rendered verbatim |
+
+### 5.1 Presentation surfaces
+
+Two surfaces, one core, and the split is deliberate:
+
+| Surface | Runs on | Why that surface |
+|---------|---------|------------------|
+| `irscan.exe` (CLI, styled terminal view) | the machine under suspicion | One static file that needs nothing installed. A machine you do not trust should not be asked to run a WebView, a runtime or an installer. |
+| `irscan-desktop` (Tauri) | a machine you trust | Comfortable review of a report: the same findings with room to read, filter and export. |
+
+Neither surface owns any logic. If the GUI ever needs a fact the CLI does not expose, the
+fact belongs in the core - that is the rule that keeps the two from drifting apart and is
+why FR-31 is written as a prohibition rather than a suggestion.
 
 ## 6. Quality attributes and tactics (ADD)
 

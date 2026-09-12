@@ -1,0 +1,12 @@
+# Build configuration for the shipped binary.
+#
+# Static C runtime on purpose. The deliverable is a single file that gets copied to
+# another machine and run there, and `vcruntime140.dll` is NOT part of a clean Windows
+# installation - it arrives with the Visual C++ redistributable. A dynamically linked
+# CRT would make the tool fail to start on exactly the machines it is meant for, with
+# an error the user cannot act on. Rust's default for the MSVC target is dynamic, so
+# this has to be stated.
+# Applies to every crate in the repository, so both front ends produce one
+# self-contained file.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

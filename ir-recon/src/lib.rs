@@ -14,6 +14,8 @@
 pub mod collect;
 pub mod known_services;
 pub mod model;
+pub mod monitor;
+pub mod remediate;
 pub mod report;
 pub mod rules;
 pub mod signatures;

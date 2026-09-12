@@ -261,33 +261,15 @@ fn host_info() -> HostInfo {
     }
 }
 
-/// The collector set and its execution order.
+/// The collector set and its execution order, taken from the library.
 ///
-/// The order is fixed rather than parallel so that two scans of an unchanged host
-/// produce byte-identical reports - a diff between runs should mean the host changed.
-/// Two orderings are load-bearing: `processes` runs before `network` (which labels
-/// sockets with process names), and `yara` runs last (it consumes what the other
-/// collectors found instead of walking the disk itself).
+/// The list itself lives in `collect::default_set` so that the desktop application
+/// runs exactly the same checks; all this function decides is whether the content
+/// scan is wanted at all.
 fn build_collectors(opts: &Options) -> Vec<Box<dyn Collector>> {
-    let mut collectors: Vec<Box<dyn Collector>> = vec![
-        Box::new(collect::accounts::AccountsCollector),
-        Box::new(collect::remote_access::RemoteAccessCollector),
-        Box::new(collect::services::ServicesCollector),
-        Box::new(collect::tasks::TasksCollector),
-        Box::new(collect::autoruns::AutorunsCollector),
-        Box::new(collect::wmi::WmiCollector),
-        Box::new(collect::inputfilters::InputFiltersCollector),
-        Box::new(collect::defender::DefenderCollector),
-        Box::new(collect::processes::ProcessesCollector),
-        Box::new(collect::network::NetworkCollector),
-        Box::new(collect::traces::TracesCollector),
-        Box::new(collect::filesystem::FilesystemCollector::new(opts.quick)),
-        Box::new(collect::events::EventsCollector),
-    ];
-    if !opts.no_yara {
-        collectors.push(Box::new(collect::yara::YaraCollector::new(
-            opts.rule_files(),
-        )));
+    let mut collectors = collect::default_set(opts.quick, opts.rule_files());
+    if opts.no_yara {
+        collectors.retain(|c| c.name() != "yara");
     }
     collectors
 }
@@ -397,6 +379,23 @@ fn endpoint_address(endpoint: &str) -> &str {
         Some(idx) if idx > 0 => endpoint[..idx].trim_matches(['[', ']']),
         _ => endpoint,
     }
+}
+
+/// Should the process wait for a key before exiting?
+///
+/// True only in the double-click case: no arguments at all and a real console. A
+/// console application that exits instantly takes the report with it, so the user
+/// double-clicks, sees a flash, and has nothing to read. An explicit run with flags -
+/// including every scripted or piped run - never waits.
+fn should_pause(args_were_empty: bool, stdout_is_terminal: bool) -> bool {
+    args_were_empty && stdout_is_terminal
+}
+
+fn pause_before_exit() {
+    println!();
+    println!("Press Enter to close this window...");
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
 }
 
 fn report_stem(host: &HostInfo) -> String {
@@ -602,6 +601,10 @@ fn main() -> ExitCode {
         watch_connections(opts.watch_seconds, &ctx, &style);
     }
 
+    if should_pause(args.is_empty(), std::io::stdout().is_terminal()) {
+        pause_before_exit();
+    }
+
     ExitCode::SUCCESS
 }
 
@@ -744,6 +747,18 @@ mod tests {
         assert_eq!(endpoint_address("*:*"), "*");
         assert_eq!(endpoint_address(""), "");
         assert_eq!(endpoint_address("noport"), "noport");
+    }
+
+    #[test]
+    fn the_pause_happens_only_for_a_double_click() {
+        // Double-click: no arguments, a console. The report must not vanish with the
+        // window.
+        assert!(should_pause(true, true));
+        // An explicit run with flags never waits, so scripts and pipes keep working.
+        assert!(!should_pause(false, true));
+        // Redirected output is not a human watching a window.
+        assert!(!should_pause(true, false));
+        assert!(!should_pause(false, false));
     }
 
     #[test]

@@ -1,0 +1,41 @@
+[package]
+name = "irscan-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Desktop surface for irscan: the same read-only triage, in a window"
+license = "MIT OR Apache-2.0"
+build = "build.rs"
+
+# The whole point of this crate is that it owns no detection logic. It links the same
+# `irscan` library the command-line tool uses, so a finding cannot differ between the
+# two surfaces - see docs/spec.md FR-31, which is written as a prohibition for exactly
+# that reason.
+[dependencies]
+irscan = { path = "../ir-recon" }
+tauri = { version = "2", features = [] }
+# Only so the user can choose where a report is saved. The plugin brings no
+# other capability into the binary: no shell, no http, no general filesystem.
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+# The same lint policy as the library crate: production code must not unwrap, expect or
+# panic, and the test-only allowance is declared at the top of src/main.rs.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

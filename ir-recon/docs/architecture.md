@@ -65,6 +65,15 @@ src/
     elevate.rs       self-elevation via ShellExecuteExW "runas"
     console.rs       ENABLE_VIRTUAL_TERMINAL_PROCESSING probe
   known_services.rs  generated table of 70 Windows service names (see below)
+desktop/            Tauri v2 shell: the ONLY place that knows about a window
+  Cargo.toml         depends on the `irscan` crate (path dependency, same core)
+  tauri.conf.json    window, identifier, and `frontendDist` into ui/
+  src/main.rs        Tauri commands: start_scan, export_report, version
+  src/scan.rs        bridges collect::run_all_with progress to Tauri events
+  ui/index.html      plain HTML - no framework, no bundler
+  ui/app.js          renders the view model; never decides anything itself
+  ui/style.css       the monochrome design system
+  icons/icon.ico     required by the Windows resource compiler
 rules/
   irscan.yar         our own bundled YARA rules (embedded with include_str!)
 tools/
@@ -232,6 +241,47 @@ its assertion mechanism, so `#![cfg_attr(test, allow(clippy::panic, clippy::unwr
 clippy::expect_used))]` lifts them for the test configuration only. Without that
 distinction one either gives up the lints in shipped code or writes test assertions that
 are worse at reporting a failure - both are worse than the two lines it takes to say so.
+
+## 7.2 Why the desktop surface is Tauri and not Electron
+
+- The packaged application does not ship a browser engine: it uses the WebView2 runtime
+  the OS already has. An Electron build would add ~150 MB and a Node runtime for a tool
+  whose whole point is to be lightweight on someone else's machine.
+- The shell is Rust, so it links the existing crate directly and the scan runs **in
+  process** rather than over a local socket or a spawned binary. There is no IPC surface
+  to get wrong and no second copy of the detection logic to keep in step.
+- Consequence to accept honestly: the GUI depends on WebView2 being present. Windows 11
+  ships it and Windows 10 receives it through Windows Update, but "usually present" is
+  not "always present", which is precisely why the CLI is not going away (FR-37).
+
+## 7.3 Why the frontend has no bundler
+
+`ui/` is three files served as-is. No npm, no `node_modules`, no build step:
+
+- a security tool's UI should not require a dependency tree of several hundred packages
+  to be reproduced;
+- the output is inspectable by reading three files rather than a source map;
+- and it can be loaded directly from disk in a browser, which is how the design is
+  verified visually during development instead of being trusted from a screenshot.
+
+## 7.4 Localisation
+
+All interface text lives in one dictionary (`RU` plus `EN`) resolved through
+`t(key, params)`; there are no literals in the markup. That is a maintainability rule
+rather than a translation preference: a string that exists in one place can be found,
+corrected and checked, and a string sprinkled through a renderer cannot.
+
+Two consequences are deliberate:
+
+* **Data is never translated.** A service name, a file path and an evidence line are shown
+  exactly as collected, because they are the evidence - paraphrasing them would make the
+  report unusable as evidence and would break the reader's ability to search for the string
+  on the machine.
+* **Russian is the longer language on every label that matters**, so the layout cannot treat
+  text as if its length were fixed. The frame reserves its geometry up front (header height,
+  the change strip's box, the footer band) and a label that does not fit is shortened; the
+  measurement that proves this is part of the acceptance criteria (FR-46) rather than a
+  matter of opinion.
 
 ## 8. Why Rust
 

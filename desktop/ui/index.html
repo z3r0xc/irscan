@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IRSCAN</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Every visible string in this file is a placeholder. `data-i18n` names the
+     dictionary key in app.js and the text between the tags is the English
+     fallback; applyI18n() in app.js overwrites both on boot, before the first
+     render, so the language decision has exactly one home. A bare string here
+     would be a string no translator can find. Names of the product, collector
+     identifiers, host names and service names are data: they are never keys. -->
+
+<header class="topbar">
+  <div class="mark">
+    <span class="mark-name">IRSCAN</span>
+    <span class="mark-version" id="app-version">&mdash;</span>
+  </div>
+
+  <div class="hostline" id="host-line">
+    <span class="host-name" id="host-name">no scan yet</span>
+    <span class="host-sep" aria-hidden="true">&middot;</span>
+    <span class="host-user" id="host-user"></span>
+  </div>
+
+  <div class="topbar-right">
+    <span class="chip chip-elev" id="elev-chip" data-state="unknown">ELEVATION UNKNOWN</span>
+    <!-- Save buttons live in the header: the report is a property of the run,
+         not of a selected finding, and the header is the only strip on screen
+         before a scan completes. They stay disabled until there is a run to
+         export, so they cannot reflow the header when data arrives. -->
+    <button type="button" class="btn-ghost" id="save-txt-btn" disabled><span data-i18n="save.report">Save report</span></button>
+    <button type="button" class="btn-ghost" id="save-json-btn" disabled><span data-i18n="save.json">Save JSON</span></button>
+    <button type="button" class="btn-primary" id="scan-btn" aria-describedby="app-version">
+      <span class="glyph" id="scan-glyph" aria-hidden="true">&#9675;</span>
+      <span id="scan-label">Scan</span>
+    </button>
+  </div>
+</header>
+
+<main class="app" id="app">
+
+  <!-- Verdict band. Its height is reserved in CSS so the panes below never move. -->
+  <section class="band" aria-labelledby="verdict-heading">
+    <h2 class="visually-hidden" id="verdict-heading" data-i18n="band.verdict">Verdict</h2>
+
+    <div class="counts">
+      <div class="count" data-sev="high">
+        <span class="count-glyph glyph" aria-hidden="true">&#9679;</span>
+        <span class="count-num" id="count-high">&mdash;</span>
+        <span class="count-label" data-i18n="sev.high">HIGH</span>
+      </div>
+      <div class="count" data-sev="med">
+        <span class="count-glyph glyph" aria-hidden="true">&#9680;</span>
+        <span class="count-num" id="count-med">&mdash;</span>
+        <span class="count-label" data-i18n="sev.med">MED</span>
+      </div>
+      <div class="count" data-sev="info">
+        <span class="count-glyph glyph" aria-hidden="true">&#9675;</span>
+        <span class="count-num" id="count-info">&mdash;</span>
+        <span class="count-label" data-i18n="sev.info">INFO</span>
+      </div>
+    </div>
+
+    <div class="band-text">
+      <p class="headline" id="headline">No scan has been run yet.</p>
+
+      <details class="rec" id="rec-wrap">
+        <summary class="rec-summary">
+          <span class="micro" data-i18n="rec.actions">Recommended actions</span>
+          <span class="rec-count" id="rec-count"></span>
+        </summary>
+        <ol class="rec-list" id="rec-list"></ol>
+      </details>
+    </div>
+  </section>
+
+  <!-- "Since last time". A reserved-height row of main, always present, never
+       hidden: the strip's three states occupy the same box so the panes below
+       never move when delta arrives. `d` jumps here. -->
+  <section class="delta" id="delta" data-state="idle" tabindex="-1"
+           aria-labelledby="delta-heading">
+    <h2 class="visually-hidden" id="delta-heading" data-i18n="delta.heading">Changes since the last scan</h2>
+    <div class="delta-line">
+      <span class="delta-mark" id="delta-mark" aria-hidden="true"></span>
+      <span class="delta-summary" id="delta-summary">Nothing to compare yet.</span>
+      <span class="chip chip-new" id="delta-chip" hidden data-i18n="delta.chip">NEW PRESENCE</span>
+      <span class="delta-since" id="delta-since"></span>
+    </div>
+    <div class="delta-groups" id="delta-groups"></div>
+    <p class="delta-hint" id="delta-hint" data-i18n="delta.hint">Click any entry to copy its name.</p>
+  </section>
+
+  <!-- Progress. Never a spinner: the collector names are the progress. -->
+  <section class="progress" id="progress" hidden aria-labelledby="progress-heading">
+    <h2 class="micro progress-head" id="progress-heading">
+      <span data-i18n="progress.heading">Scanning</span> <span id="progress-summary"></span>
+    </h2>
+    <ul class="progress-list" id="progress-list"></ul>
+  </section>
+
+  <!-- Two panes. Min-heights are set in CSS: content arrival cannot resize them. -->
+  <section class="panes" aria-label="Findings" data-i18n-aria="findings.label">
+
+    <div class="pane-list">
+      <div class="pane-head">
+        <div class="filters" role="group" aria-label="Filter by severity" data-i18n-aria="findings.filterLabel">
+          <button type="button" class="filter is-on" data-filter="all" aria-pressed="true">
+            <span data-i18n="filter.all">All</span> <span class="filter-count" id="f-all">&mdash;</span>
+          </button>
+          <button type="button" class="filter" data-filter="high" aria-pressed="false">
+            <span data-i18n="sev.high">HIGH</span> <span class="filter-count" id="f-high">&mdash;</span>
+          </button>
+          <button type="button" class="filter" data-filter="med" aria-pressed="false">
+            <span data-i18n="sev.med">MED</span> <span class="filter-count" id="f-med">&mdash;</span>
+          </button>
+          <button type="button" class="filter" data-filter="info" aria-pressed="false">
+            <span data-i18n="sev.info">INFO</span> <span class="filter-count" id="f-info">&mdash;</span>
+          </button>
+        </div>
+        <div class="search-wrap">
+          <input type="search" id="search" class="search" placeholder="Search titles and evidence"
+                 aria-label="Search findings by title, category or evidence" autocomplete="off"
+                 spellcheck="false" data-i18n-placeholder="search.placeholder"
+                 data-i18n-aria="search.label">
+          <span class="key-hint" aria-hidden="true">/</span>
+        </div>
+      </div>
+
+      <ul class="group-list" id="group-list" tabindex="0" role="listbox"
+          aria-label="Finding groups" aria-activedescendant="" data-i18n-aria="group.label"></ul>
+    </div>
+
+    <div class="pane-detail">
+      <div class="detail-scroll" id="detail-scroll">
+        <div class="detail-body" id="detail-body"></div>
+      </div>
+      <!-- Containment actions for the selected finding. Empty and hidden until
+           a finding can actually be acted on; it is its own region below the
+           scroll box so opening it never moves the evidence above it. -->
+      <div class="detail-actions" id="detail-actions" hidden></div>
+    </div>
+
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer-row">
+    <span class="micro" data-i18n="warn.heading">Warnings</span>
+    <span class="footer-count" id="warn-count">&mdash;</span>
+    <button type="button" class="btn-ghost" id="raw-btn" aria-expanded="false" aria-controls="raw-block">
+      <span class="glyph" aria-hidden="true">&#9675;</span> <span data-i18n="raw.toggle">Raw data</span>
+    </button>
+    <span class="footer-raw-count" id="raw-count"></span>
+  </div>
+
+  <p class="notproven" id="notproven">
+    A clean result is not proof of a clean machine. No scan has been run yet, so nothing
+    on this screen has been checked.
+  </p>
+</footer>
+
+<!-- Warnings and raw sections always remain reachable, expanded or not. -->
+<div class="drawer" id="drawer" hidden>
+  <section class="drawer-section" id="warn-block" aria-labelledby="warn-heading">
+    <h2 class="micro" id="warn-heading" data-i18n="warn.heading">Warnings</h2>
+    <p class="drawer-note" id="warn-note"></p>
+    <ul class="warn-list" id="warn-list"></ul>
+  </section>
+
+  <section class="drawer-section" id="raw-block" aria-labelledby="raw-heading">
+    <h2 class="micro" id="raw-heading" data-i18n="raw.heading">Raw data</h2>
+    <div class="raw-sections" id="raw-sections"></div>
+  </section>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

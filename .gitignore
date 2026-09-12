@@ -3,6 +3,9 @@
 
 # Rust build output
 /ir-recon/target/
+/desktop/target/
+# Tauri generates these on every build: the ACL schema and the compiled assets.
+/desktop/gen/
 /_rusttest/
 
 # Generated scan reports must never be committed (they contain host data).

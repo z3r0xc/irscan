@@ -10,9 +10,9 @@
 
 use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
-    RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY,
-    HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ, REG_DWORD,
-    REG_EXPAND_SZ, REG_MULTI_SZ, REG_QWORD, REG_SZ,
+    RegCloseKey, RegDeleteValueW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW,
+    RegSetValueExW, HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS,
+    KEY_READ, KEY_SET_VALUE, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_QWORD, REG_SZ,
 };
 
 use super::strings::{from_utf16_bytes, from_utf16_bytes_all, from_wide, from_wide_len, wide};
@@ -322,6 +322,114 @@ pub fn enum_subkeys_of(key: &OwnedRegKey) -> Vec<String> {
     out
 }
 
+/// Open a subkey for writing.
+///
+/// Deliberately a separate function from [`open`], which asks only for `KEY_READ`. Every
+/// other part of this tool reads; only the remediation path writes, and it should be
+/// obvious at the call site which one is in play.
+pub fn open_for_write(root: RootKey, subkey: &str) -> Option<OwnedRegKey> {
+    let path = wide(subkey);
+    let mut handle: HKEY = std::ptr::null_mut();
+    // SAFETY: a predefined root key, a NUL-terminated path that outlives the call, and a
+    // valid out-parameter slot.
+    let rc = unsafe {
+        RegOpenKeyExW(
+            root_handle(root),
+            path.as_ptr(),
+            0,
+            KEY_READ | KEY_SET_VALUE,
+            &mut handle,
+        )
+    };
+    if rc != ERROR_SUCCESS || handle.is_null() {
+        None
+    } else {
+        Some(OwnedRegKey(handle))
+    }
+}
+
+/// Write a `REG_DWORD`.
+///
+/// Returns `Err` with the Win32 message rather than a bool, because the caller is about to
+/// tell the user that something on their machine was changed: a silent failure there is
+/// the one outcome that must not happen.
+pub fn set_u64(key: &OwnedRegKey, name: &str, value: u64) -> Result<(), String> {
+    let wname = wide(name);
+    let bytes = (value as u32).to_le_bytes();
+    // SAFETY: the key is open for writing, the name is NUL-terminated, and the buffer is
+    // exactly the four bytes the type declares.
+    let rc = unsafe {
+        RegSetValueExW(
+            key.raw(),
+            wname.as_ptr(),
+            0,
+            REG_DWORD,
+            bytes.as_ptr(),
+            bytes.len() as u32,
+        )
+    };
+    if rc == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(format!("RegSetValueExW failed with code {rc}"))
+    }
+}
+
+/// Delete one value. Used only by a removal the user explicitly confirmed.
+pub fn delete_value(key: &OwnedRegKey, name: &str) -> Result<(), String> {
+    let wname = wide(name);
+    // SAFETY: the key is open for writing and the name is NUL-terminated.
+    let rc = unsafe { RegDeleteValueW(key.raw(), wname.as_ptr()) };
+    if rc == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(format!("RegDeleteValueW failed with code {rc}"))
+    }
+}
+
+/// Create a key. Test-only: the shipped tool never creates a key, and this exists so the
+/// write path can be exercised against a real registry rather than a mock.
+#[cfg(test)]
+pub fn reg_create_for_test(root: RootKey, subkey: &str) -> bool {
+    use windows_sys::Win32::System::Registry::{RegCreateKeyExW, REG_OPTION_NON_VOLATILE};
+    let path = wide(subkey);
+    let mut handle: HKEY = std::ptr::null_mut();
+    let mut disposition: u32 = 0;
+    // SAFETY: a predefined root, a NUL-terminated path, and valid out-parameters.
+    let rc = unsafe {
+        RegCreateKeyExW(
+            root_handle(root),
+            path.as_ptr(),
+            0,
+            std::ptr::null_mut(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_READ | KEY_SET_VALUE,
+            std::ptr::null_mut(),
+            &mut handle,
+            &mut disposition,
+        )
+    };
+    if rc == ERROR_SUCCESS && !handle.is_null() {
+        // SAFETY: the handle came from a successful create and is not used afterwards.
+        unsafe {
+            let _ = RegCloseKey(handle);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Delete a key. Test-only, and only ever used on a key this test created.
+#[cfg(test)]
+pub fn reg_delete_for_test(root: RootKey, subkey: &str) -> bool {
+    use windows_sys::Win32::System::Registry::RegDeleteKeyW;
+    let path = wide(subkey);
+    // SAFETY: a predefined root and a NUL-terminated path.
+    let rc = unsafe { RegDeleteKeyW(root_handle(root), path.as_ptr()) };
+    rc == ERROR_SUCCESS
+}
+
 /// Does a subkey exist? Cheaper and clearer than matching on `open`.
 pub fn key_exists(root: RootKey, subkey: &str) -> bool {
     open(root, subkey).is_some()
@@ -406,6 +514,43 @@ mod tests {
             RegValue::MultiStr(vec!["a".to_string(), "b".to_string()])
         );
         assert_eq!(decode(0xFFFF, &[1, 2, 3]), RegValue::Other);
+    }
+
+    #[test]
+    fn a_dword_can_be_written_and_read_back_under_hkcu() {
+        // The remediation path is the only writer in this tool, so it gets a real test on
+        // a real key rather than a mock. HKCU\Software is used because a test must not
+        // need administrator rights and must clean up after itself.
+        let path = r"Software\IRScanSelfTest";
+        let created = reg_create_for_test(RootKey::Hkcu, path);
+        assert!(created, "could not create the test key");
+
+        if let Some(key) = open_for_write(RootKey::Hkcu, path) {
+            assert!(set_u64(&key, "Start", 4).is_ok());
+        }
+        assert_eq!(get_u64(RootKey::Hkcu, path, "Start"), Some(4));
+
+        if let Some(key) = open_for_write(RootKey::Hkcu, path) {
+            assert!(delete_value(&key, "Start").is_ok());
+        }
+        assert_eq!(get_u64(RootKey::Hkcu, path, "Start"), None);
+
+        let _ = reg_delete_for_test(RootKey::Hkcu, path);
+    }
+
+    #[test]
+    fn deleting_a_value_that_is_absent_is_an_error_not_a_silent_success() {
+        let path = r"Software\IRScanSelfTest";
+        let _ = reg_create_for_test(RootKey::Hkcu, path);
+        let result = match open_for_write(RootKey::Hkcu, path) {
+            Some(key) => delete_value(&key, "IRScanNoSuchValue"),
+            None => Err("key unavailable".to_string()),
+        };
+        assert!(
+            result.is_err(),
+            "an absent value must be reported, not assumed gone"
+        );
+        let _ = reg_delete_for_test(RootKey::Hkcu, path);
     }
 
     #[test]

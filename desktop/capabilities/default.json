@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Everything the main window may do. The application's own commands are always callable; the dialog permission exists solely so the user can choose where to save a report. There is deliberately no filesystem, shell, http or process permission: the only file this application writes is the one the user picks.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-save"
+  ]
+}

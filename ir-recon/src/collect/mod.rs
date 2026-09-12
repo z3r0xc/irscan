@@ -112,6 +112,42 @@ where
     failures
 }
 
+/// The collector set and its execution order.
+///
+/// This lives in the library rather than in each front end on purpose: two surfaces that
+/// each assembled their own list would drift, and the desktop application must run
+/// exactly the checks the command-line tool runs.
+///
+/// The order is fixed rather than parallel so that two scans of an unchanged host
+/// produce byte-identical reports - a diff between runs should mean the host changed.
+/// Two orderings are load-bearing: `processes` runs before `network` (which labels
+/// sockets with process names), and `yara` runs last (it consumes what the other
+/// collectors found instead of walking the disk itself).
+pub fn default_set(
+    quick: bool,
+    extra_rule_files: Vec<std::path::PathBuf>,
+) -> Vec<Box<dyn Collector>> {
+    let mut collectors: Vec<Box<dyn Collector>> = vec![
+        Box::new(crate::collect::accounts::AccountsCollector),
+        Box::new(crate::collect::remote_access::RemoteAccessCollector),
+        Box::new(crate::collect::services::ServicesCollector),
+        Box::new(crate::collect::tasks::TasksCollector),
+        Box::new(crate::collect::autoruns::AutorunsCollector),
+        Box::new(crate::collect::wmi::WmiCollector),
+        Box::new(crate::collect::inputfilters::InputFiltersCollector),
+        Box::new(crate::collect::defender::DefenderCollector),
+        Box::new(crate::collect::processes::ProcessesCollector),
+        Box::new(crate::collect::network::NetworkCollector),
+        Box::new(crate::collect::traces::TracesCollector),
+        Box::new(crate::collect::filesystem::FilesystemCollector::new(quick)),
+        Box::new(crate::collect::events::EventsCollector),
+    ];
+    collectors.push(Box::new(crate::collect::yara::YaraCollector::new(
+        extra_rule_files,
+    )));
+    collectors
+}
+
 /// Run every collector, ignoring progress. Equivalent to `run_all_with` with a
 /// no-op observer.
 pub fn run_all(collectors: &[Box<dyn Collector>], ctx: &mut ScanContext) -> usize {
