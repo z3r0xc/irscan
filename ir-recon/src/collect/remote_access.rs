@@ -124,19 +124,22 @@ impl Collector for RemoteAccessCollector {
         ));
         if let Some(severity) = rdp_enabled(deny) {
             ctx.add(
-                Finding::new(severity, "remote_access", "Remote Desktop is enabled")
+                Finding::new(severity, "remote_access", "Включён удалённый рабочий стол")
                     .evidence(format!(
-                        "HKLM\\{TERMINAL_SERVER}\\fDenyTSConnections = 0: this machine accepts \
-                         Remote Desktop connections."
+                        "HKLM\\{TERMINAL_SERVER}\\fDenyTSConnections = 0: машина принимает \
+                         подключения по удалённому рабочему столу."
                     ))
                     .remediation(
-                        "If nobody uses Remote Desktop on this machine, turn it off: Settings > \
-                         System > Remote Desktop, or set fDenyTSConnections to 1. If it is \
-                         needed, confirm every account allowed to log on through it.",
+                        "Если удалённый рабочий стол на этой машине никому не нужен, отключите \
+                         его: Параметры > Система > Удалённый рабочий стол, либо задайте \
+                         fDenyTSConnections = 1. Если он нужен, проверьте все учётные записи, \
+                         которым разрешён вход через него.",
                     ),
             );
         } else if deny.is_none() {
-            lines.push("  (value absent: Remote Desktop was never configured)".to_string());
+            lines.push(
+                "  (значение отсутствует: удалённый рабочий стол не настраивался)".to_string(),
+            );
         }
 
         // --- Remote Assistance --------------------------------------------------
@@ -152,15 +155,15 @@ impl Collector for RemoteAccessCollector {
         ));
         if let Some(severity) = remote_assistance_severity(help) {
             ctx.add(
-                Finding::new(severity, "remote_access", "Remote Assistance is enabled")
+                Finding::new(severity, "remote_access", "Включён удалённый помощник")
                     .evidence(format!(
-                        "HKLM\\{REMOTE_ASSISTANCE}\\fAllowToGetHelp = {}: someone can offer to \
-                         view or control this session.",
+                        "HKLM\\{REMOTE_ASSISTANCE}\\fAllowToGetHelp = {}: кто-то может \
+                         предложить просмотр или управление этим сеансом.",
                         describe(help)
                     ))
                     .remediation(
-                        "Unless this machine is actively supported this way, turn Remote \
-                         Assistance off in System Properties > Remote.",
+                        "Если эту машину так не поддерживают постоянно, отключите удалённого \
+                         помощника в разделе «Свойства системы» > «Удалённые сеансы».",
                     ),
             );
         }
@@ -178,7 +181,11 @@ impl Collector for RemoteAccessCollector {
         ));
         lines.push(format!(
             "HKLM\\{WSMAN_SERVICE}: {}",
-            if wsman_present { "present" } else { "absent" }
+            if wsman_present {
+                "присутствует"
+            } else {
+                "отсутствует"
+            }
         ));
         let basic_allowed = matches!(allow_basic, Some(value) if value > 0);
         if basic_allowed || wsman_present {
@@ -186,21 +193,25 @@ impl Collector for RemoteAccessCollector {
                 Finding::new(
                     Severity::Med,
                     "remote_access",
-                    "WinRM remote management is configured",
+                    "Настроено удалённое управление через WinRM",
                 )
                 .evidence(format!(
-                    "AllowBasic = {}; WinRM listener configuration {}",
+                    "AllowBasic = {}; конфигурация прослушивателя WinRM {}",
                     describe(allow_basic),
-                    if wsman_present { "present" } else { "absent" }
+                    if wsman_present {
+                        "присутствует"
+                    } else {
+                        "отсутствует"
+                    }
                 ))
                 .evidence(
-                    "WinRM (Windows Remote Management) lets another machine run commands here \
-                     over HTTP(S).",
+                    "WinRM (Windows Remote Management) позволяет другой машине выполнять здесь \
+                     команды по HTTP(S).",
                 )
                 .remediation(
-                    "If WinRM is not used for management, stop and disable the WinRM service \
-                     and remove the listener (winrm delete winrm/config/Listener). Disabling \
-                     basic authentication alone does not remove the access.",
+                    "Если WinRM не используется для управления, остановите и отключите службу \
+                     WinRM и удалите прослушиватель (winrm delete winrm/config/Listener). \
+                     Отключение одной только обычной проверки подлинности доступ не убирает.",
                 ),
             );
         }
@@ -219,19 +230,19 @@ impl Collector for RemoteAccessCollector {
 
         let listeners = listening_on(connections, RDP_PORT);
         if listeners.is_empty() {
-            lines.push(format!("no listener on port {RDP_PORT}"));
+            lines.push(format!("нет прослушивателя на порту {RDP_PORT}"));
         } else {
             for listener in &listeners {
-                lines.push(format!("listening on {RDP_PORT}: {listener}"));
+                lines.push(format!("прослушивается {RDP_PORT}: {listener}"));
             }
             let mut evidence: Vec<String> = Vec::new();
             for connection in connections {
                 if is_listener_on(connection, RDP_PORT) {
                     let process = ctx
                         .process_name(connection.pid)
-                        .unwrap_or("unknown process");
+                        .unwrap_or("неизвестный процесс");
                     evidence.push(format!(
-                        "{} is listening, owned by pid {} ({})",
+                        "{} прослушивается, владелец pid {} ({})",
                         connection.local, connection.pid, process
                     ));
                 }
@@ -240,15 +251,15 @@ impl Collector for RemoteAccessCollector {
             let mut finding = Finding::new(
                 Severity::Med,
                 "remote_access",
-                format!("Something is listening on port {RDP_PORT} (Remote Desktop)"),
+                format!("Порт {RDP_PORT} прослушивается (удалённый рабочий стол)"),
             );
             for line in evidence {
                 finding = finding.evidence(line);
             }
             ctx.add(finding.remediation(
-                "Remote Desktop is not just permitted, it is live. Confirm the process is \
-                 svchost/TermService and, if RDP is not wanted, stop the listener and disable \
-                 fDenyTSConnections.",
+                "Удалённый рабочий стол не просто разрешён, он работает. Убедитесь, что процесс \
+                 — это svchost/TermService, и, если RDP не нужен, остановите прослушиватель и \
+                 задайте fDenyTSConnections = 1.",
             ));
         }
 
@@ -260,7 +271,7 @@ impl Collector for RemoteAccessCollector {
                         .iter()
                         .find(|service| service.name.eq_ignore_ascii_case(wanted));
                     let Some(service) = found else {
-                        lines.push(format!("service {wanted}: not present"));
+                        lines.push(format!("служба {wanted}: отсутствует"));
                         continue;
                     };
                     ctx.note(
@@ -269,7 +280,7 @@ impl Collector for RemoteAccessCollector {
                         "remote-access service",
                     );
                     lines.push(format!(
-                        "service {:<16} state={:<10} start={:<10} {}",
+                        "служба {:<16} state={:<10} start={:<10} {}",
                         service.name, service.state, service.start_mode, service.image_path
                     ));
                     if service.state.eq_ignore_ascii_case("running")
@@ -279,28 +290,28 @@ impl Collector for RemoteAccessCollector {
                             Finding::new(
                                 Severity::Med,
                                 "remote_access",
-                                format!("{} is running", service.name),
+                                format!("Служба {} запущена", service.name),
                             )
                             .evidence(format!(
-                                "service {} ({}), state={}, start={}",
+                                "служба {} ({}), состояние={}, запуск={}",
                                 service.display_name,
                                 service.name,
                                 service.state,
                                 service.start_mode
                             ))
                             .evidence(
-                                "This service is not running on a default Windows workstation, \
-                                 and both sshd and RemoteRegistry are ways in.",
+                                "Эта служба не работает на обычной рабочей станции Windows, \
+                                 а sshd и RemoteRegistry — это способы попасть внутрь.",
                             )
                             .remediation(
-                                "If remote access is not wanted, stop and disable the service \
-                                 and confirm with the machine's owner who installed it.",
+                                "Если удалённый доступ не нужен, остановите и отключите службу \
+                                 и уточните у владельца машины, кто её установил.",
                             ),
                         );
                     }
                 }
             }
-            Err(e) => ctx.warn(format!("remote_access: service enumeration failed: {e}")),
+            Err(e) => ctx.warn(format!("remote_access: не удалось перечислить службы: {e}")),
         }
 
         ctx.raw_section("REMOTE ACCESS", lines);
@@ -312,7 +323,7 @@ impl Collector for RemoteAccessCollector {
 fn describe(value: Option<u64>) -> String {
     match value {
         Some(n) => n.to_string(),
-        None => "absent".to_string(),
+        None => "отсутствует".to_string(),
     }
 }
 
@@ -384,7 +395,7 @@ mod tests {
 
     #[test]
     fn describe_absent_is_not_zero() {
-        assert_eq!(describe(None), "absent");
+        assert_eq!(describe(None), "отсутствует");
         assert_eq!(describe(Some(0)), "0");
     }
 }

@@ -88,16 +88,16 @@ pub enum HaystackKind {
 impl HaystackKind {
     pub fn label(self) -> &'static str {
         match self {
-            HaystackKind::ProcessName => "process",
-            HaystackKind::Path => "path",
-            HaystackKind::ServiceName => "service",
-            HaystackKind::ServiceDisplayName => "service-display",
-            HaystackKind::RegistryPath => "registry",
-            HaystackKind::TaskName => "task",
-            HaystackKind::Domain => "domain",
-            HaystackKind::Port => "port",
-            HaystackKind::CommandLine => "cmdline",
-            HaystackKind::ProductName => "product",
+            HaystackKind::ProcessName => "имя процесса",
+            HaystackKind::Path => "путь",
+            HaystackKind::ServiceName => "имя службы",
+            HaystackKind::ServiceDisplayName => "отображаемое имя службы",
+            HaystackKind::RegistryPath => "ветка реестра",
+            HaystackKind::TaskName => "имя задачи",
+            HaystackKind::Domain => "домен",
+            HaystackKind::Port => "порт",
+            HaystackKind::CommandLine => "командная строка",
+            HaystackKind::ProductName => "название продукта",
         }
     }
 }
@@ -252,7 +252,7 @@ impl ScanContext {
         // *why* a section is empty add their own line first; this is the floor.
         if lines.is_empty() {
             lines.push(format!(
-                "{section} was empty - the check produced no lines (see WARNINGS for a check that could not run)"
+                "{section}: раздел пуст - проверка не дала ни одной строки (причина в разделе ВНИМАНИЕ)"
             ));
         }
 

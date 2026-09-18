@@ -690,11 +690,11 @@ fn collect_channel(
             // checked and is clean", which is precisely the false negative to avoid: on
             // this host `Security` needs elevation, and a silent scan would have reported
             // an unread logon history as no logons at all.
-            ctx.warn(format!("events: {channel} unavailable: {e}"));
+            ctx.warn(format!("события: журнал {channel} недоступен: {e}"));
             ctx.raw_section(
                 section,
                 vec![format!(
-                    "not examined - the channel could not be read ({e}); this is not a clean result"
+                    "не проверялось - журнал не читается ({e}); это не значит, что здесь чисто"
                 )],
             );
             return None;
@@ -718,11 +718,11 @@ fn collect_channel(
         // Empty is a real result, and it is stated as one so it cannot be mistaken for a
         // channel that was never queried.
         lines.push(format!(
-            "examined: {channel} matched nothing for the query {xpath}"
+            "проверено: журнал {channel} не дал совпадений по запросу {xpath}"
         ));
     } else {
         lines.push(format!(
-            "examined {} event(s) for {xpath}; {} parsed, {} unparseable",
+            "проверено событий: {} по запросу {xpath}; разобрано {}, не разобрано {}",
             events.len(),
             parsed.len(),
             unparsed
@@ -730,7 +730,7 @@ fn collect_channel(
     }
     if events.len() >= max {
         lines.push(format!(
-            "the query returned the limit of {max}; older events were not examined"
+            "запрос вернул предел в {max}; более старые события не проверялись"
         ));
     }
 
@@ -759,9 +759,9 @@ fn audit_channels(ctx: &mut ScanContext) {
             Ok(events) => events,
             Err(e) => {
                 report.push(format!(
-                    "{channel}: not audited - the channel could not be read ({e})"
+                    "{channel}: не проверялся - журнал не читается ({e})"
                 ));
-                ctx.warn(format!("events: {channel} not audited: {e}"));
+                ctx.warn(format!("события: журнал {channel} не проверялся: {e}"));
                 ctx.raw_section(section, report.clone());
                 continue;
             }
@@ -783,17 +783,17 @@ fn audit_channels(ctx: &mut ScanContext) {
             .collect();
 
         report.push(format!(
-            "{channel}: {with_ids} event(s) examined for gaps in the record numbering"
+            "{channel}: проверено событий на пропуски в нумерации записей: {with_ids}"
         ));
 
         if records.len() < crate::logaudit::MIN_RECORDS_FOR_GAP {
             report.push(format!(
-                "{channel}: too few records to judge (need {})",
+                "{channel}: слишком мало записей для вывода (нужно {})",
                 crate::logaudit::MIN_RECORDS_FOR_GAP
             ));
         } else {
             let gaps = crate::logaudit::find_gaps(channel, &records);
-            report.push(format!("{channel}: {} gap(s) in the numbering", gaps.len()));
+            report.push(format!("{channel}: пропусков в нумерации: {}", gaps.len()));
             if let Some(finding) = crate::logaudit::gaps_finding(channel, &gaps) {
                 ctx.add(finding);
             }
@@ -804,7 +804,7 @@ fn audit_channels(ctx: &mut ScanContext) {
             // "6h" while applying 36h, which is worse than saying nothing, because the
             // reader would then reason about gaps the check had not looked for.
             report.push(format!(
-                "{channel}: {} stretch(es) of silence over {}",
+                "{channel}: периодов тишины длиннее {}: {}",
                 silences.len(),
                 crate::logaudit::human_duration(crate::logaudit::SILENCE_SECONDS)
             ));
@@ -919,9 +919,9 @@ fn service_install(ctx: &mut ScanContext) {
         // image but only this one catches a tool installed somewhere ordinary - which is how
         // a legitimate-looking RMM deployment arrives.
         let known_tool = if is_known_remote_tool_service(&safe_name) {
-            Some("the service name matches a known remote-access tool")
+            Some("имя службы совпадает с известным средством удалённого доступа")
         } else if is_known_remote_tool_image(&safe_image) {
-            Some("the service image matches a known remote-access tool")
+            Some("файл службы совпадает с известным средством удалённого доступа")
         } else {
             None
         };
@@ -935,7 +935,7 @@ fn service_install(ctx: &mut ScanContext) {
         };
 
         let when = if fields.time_created.is_empty() {
-            "an unknown time".to_string()
+            "время неизвестно".to_string()
         } else {
             sanitize(&fields.time_created, MAX_DATA_VALUE)
         };
@@ -943,28 +943,28 @@ fn service_install(ctx: &mut ScanContext) {
         let mut finding = Finding::new(
             severity,
             "service-install",
-            "Service was installed and logged by the Service Control Manager",
+            "Служба была установлена, и Service Control Manager записал это в журнал",
         );
         if let Some(reason) = known_tool {
-            finding = finding.evidence(format!("recognised: {reason}"));
+            finding = finding.evidence(format!("опознано: {reason}"));
         }
         ctx.add(
             finding
-                .evidence(format!("service: {safe_name}"))
-            .evidence(format!("image: {safe_image}"))
-            .evidence(format!("installed: {when}"))
+                .evidence(format!("служба: {safe_name}"))
+                .evidence(format!("файл: {safe_image}"))
+                .evidence(format!("установлено: {when}"))
             .evidence(
-                "Event 7045 is written by the SCM at install time, so it persists even after \
-                 the service has been deleted.",
+                "Событие 7045 записывает Service Control Manager в момент установки, поэтому оно \
+                 сохраняется даже после удаления службы.",
             )
             .remediation(
-                "Confirm the image path belongs to software you installed. A service that runs \
-                 from a user-writable directory can be replaced by any process running as that \
-                 user.",
+                "Убедитесь, что путь к файлу принадлежит установленному вами программному \
+                 обеспечению. Службу, работающую из каталога, доступного на запись обычному \
+                 пользователю, может подменить любой процесс от его имени.",
             )
             .remediation(
-                "If it is not recognised, record the hash before removing it: the service \
-                 itself may already be gone.",
+                "Если она не опознана, снимите хеш файла до удаления службы: самой службы может \
+                 уже не быть.",
             ),
         );
     }
@@ -1021,19 +1021,19 @@ fn service_install_api(ctx: &mut ScanContext) {
             Finding::new(
                 Severity::High,
                 "service-install",
-                "Service installed directly through the service API",
+                "Служба установлена напрямую через API служб",
             )
-            .evidence(format!("service: {safe_name}"))
-            .evidence(format!("image: {safe_image}"))
-            .evidence(format!("account: {safe_account}"))
+            .evidence(format!("служба: {safe_name}"))
+            .evidence(format!("файл: {safe_image}"))
+            .evidence(format!("учётная запись: {safe_account}"))
             .evidence(
-                "Event 4697 records a direct CreateService call. Legitimate installers use the \
-                 Service Control Manager (which logs 7045 instead), so this method is \
-                 characteristic of a remote administration framework installing an agent.",
+                "Событие 4697 фиксирует прямой вызов CreateService. Штатные установщики \
+                 пользуются Service Control Manager (он пишет вместо этого 7045), поэтому такой \
+                 способ характерен для средств удалённого администрирования, ставящих агента.",
             )
             .remediation(
-                "Treat the image path as untrusted: capture it and its hash before any cleanup, \
-                 then remove the service.",
+                "Считайте путь к файлу недоверенным: сохраните его и его хеш до любой очистки, \
+                 затем удалите службу.",
             ),
         );
     }
@@ -1074,7 +1074,7 @@ fn remote_logons(ctx: &mut ScanContext) {
         let safe_account = sanitize(account, MAX_DATA_VALUE);
         let safe_source = sanitize(source, MAX_DATA_VALUE);
         let when = if fields.time_created.is_empty() {
-            "an unknown time".to_string()
+            "время неизвестно".to_string()
         } else {
             sanitize(&fields.time_created, MAX_DATA_VALUE)
         };
@@ -1093,18 +1093,18 @@ fn remote_logons(ctx: &mut ScanContext) {
             Finding::new(
                 Severity::High,
                 "remote-access",
-                "Interactive Remote Desktop logon",
+                "Интерактивный вход через удалённый рабочий стол",
             )
-            .evidence(format!("account: {safe_account}"))
-            .evidence(format!("source: {safe_source}"))
-            .evidence(format!("time: {when}"))
+            .evidence(format!("учётная запись: {safe_account}"))
+            .evidence(format!("адрес источника: {safe_source}"))
+            .evidence(format!("время: {when}"))
             .evidence(
-                "Logon type 10 is a full interactive Remote Desktop session: whoever held that \
-                 session could see the screen and move the mouse.",
+                "Тип входа 10 - это полноценная интерактивная сессия удалённого рабочего стола: \
+                 тот, кто её держал, видел экран и мог двигать мышь.",
             )
             .remediation(
-                "If this session is not yours, assume the account is compromised: disconnect it, \
-                 change the password, and check what was installed during the session.",
+                "Если эта сессия не ваша, считайте учётную запись скомпрометированной: \
+                 отключите её, смените пароль и проверьте, что было установлено за сессию.",
             ),
         );
     }
@@ -1142,7 +1142,7 @@ fn remote_auth(ctx: &mut ScanContext) {
         let safe_domain = sanitize(domain, MAX_DATA_VALUE);
         let safe_address = sanitize(address, MAX_DATA_VALUE);
         let when = if fields.time_created.is_empty() {
-            "an unknown time".to_string()
+            "время неизвестно".to_string()
         } else {
             sanitize(&fields.time_created, MAX_DATA_VALUE)
         };
@@ -1159,19 +1159,19 @@ fn remote_auth(ctx: &mut ScanContext) {
             Finding::new(
                 Severity::High,
                 "remote-access",
-                "Remote Desktop authentication succeeded",
+                "Аутентификация через удалённый рабочий стол прошла успешно",
             )
-            .evidence(format!("user: {safe_domain}\\{safe_user}"))
-            .evidence(format!("source: {safe_address}"))
-            .evidence(format!("time: {when}"))
+            .evidence(format!("пользователь: {safe_domain}\\{safe_user}"))
+            .evidence(format!("адрес источника: {safe_address}"))
+            .evidence(format!("время: {when}"))
             .evidence(
-                "The TerminalServices listener accepted credentials for this account. This event \
-                 is written before the session is fully established, so it survives sessions \
-                 that were aborted.",
+                "Служба TerminalServices приняла учётные данные этой учётной записи. Событие \
+                 записывается до полного установления сессии, поэтому сохраняется и для сессий, \
+                 которые были прерваны.",
             )
             .remediation(
-                "Confirm the account and the source address. Restrict RDP at the firewall and \
-                 require a VPN if remote access is needed.",
+                "Проверьте учётную запись и адрес источника. Ограничьте RDP на межсетевом \
+                 экране и требуйте VPN, если удалённый доступ нужен.",
             ),
         );
     }
@@ -1226,28 +1226,38 @@ fn failed_logons(ctx: &mut ScanContext) {
         Finding::new(
             Severity::Med,
             "remote-access",
-            "Large burst of failed logon attempts",
+            "Большой всплеск неудачных попыток входа",
         )
-        .evidence(format!("failed attempts in the queried window: {count}"))
-        .evidence(format!("accounts: {}", join_or_dash(&accounts)))
-        .evidence(format!("sources: {}", join_or_dash(&sources)))
+        .evidence(format!("неудачных попыток за проверенный период: {count}"))
+        .evidence(format!("учётные записи: {}", join_or_dash(&accounts)))
+        .evidence(format!("адреса источников: {}", join_or_dash(&sources)))
         .evidence(
-            "Many failures in a short window are an authentication attempt rather than a \
-             mistyped password, especially when the accounts or the sources vary.",
+            "Множество неудач за короткий промежуток - это попытка подбора, а не опечатка в \
+             пароле, особенно когда учётные записи или адреса источников различаются.",
         )
         .remediation(
-            "Check whether the sources are known. Repeated failures against remote-capable \
-             accounts should be followed by locking the account down or blocking the source.",
+            "Проверьте, знакомы ли вам адреса источников. После повторных неудач по учётным \
+             записям с доступом извне заблокируйте учётную запись или адрес источника.",
         ),
     );
 }
 
 /// FR-10: Defender detections and protection-state changes (Defender channel).
 ///
-/// Detection events (1116, 1117) name the malware; configuration events (1006,
-/// 1007, 1008, 1015) mean protection was changed. Both matter, but for different
-/// reasons: a detection is a payload that was seen, a configuration change is the
-/// reason it may never have been.
+/// The event IDs mean different things and must not be pooled. Per Microsoft's
+/// Defender event reference:
+///
+/// * 1006 / 1116 - malware or PUA *detected* (engine match).
+/// * 1007 / 1117 - an *action was taken* against it (block/clean/quarantine).
+/// * 1008 / 1118 - an action was *attempted and failed*.
+/// * 1015       - a *suspicious behaviour* was detected (`MALWAREPROTECTION_BEHAVIOR_DETECTED`).
+///
+/// None of those is a protection-state change. Folding 1015 in with the configuration
+/// events reported a Defender behavioural block - the product working correctly - as
+/// "protection was changed", which is its own kind of false alarm: it accuses the
+/// machine of a tamper it never experienced. An earlier version of this collector did
+/// exactly that on the author's host, where a `Behavior:Win32/ModifiedBootRecord`
+/// block became a HIGH tamper finding.
 ///
 /// Note that `collect/defender.rs` records the same channel's raw XML under its own
 /// section; that duplication is deliberate here because this collector additionally
@@ -1271,20 +1281,20 @@ fn defender_history(ctx: &mut ScanContext) {
                 let detail = defender_detail(fields);
                 ctx.add(
                     Finding::new(
-                        Severity::High,
+                        Severity::Med,
                         "defender",
-                        "Windows Defender protection state was changed",
+                        "Windows Defender обнаружил угрозу или подозрительное поведение",
                     )
-                    .evidence(format!("event id: {}", fields.event_id))
-                    .evidence(format!("detail: {detail}"))
+                    .evidence(format!("код события: {}", fields.event_id))
+                    .evidence(format!("подробности: {detail}"))
                     .evidence(
-                        "This event category records Defender being reconfigured or stopped. \
-                         Disabling real-time protection is a standard first step before \
-                         installing a persistent agent.",
+                        "Это запись о работе защиты, а не о её отключении: Defender \
+                         обнаружил угрозу (1006), принял меры (1007), не смог принять меры \
+                         (1008) или заметил подозрительное поведение (1015).",
                     )
                     .remediation(
-                        "Check Defender's current protection status and re-enable anything that \
-                         was turned off.",
+                        "Сопоставьте время события с остальными находками этого отчёта: \
+                         срабатывание защиты могло быть реакцией на то, что вы ищете.",
                     ),
                 );
             }
@@ -1304,17 +1314,16 @@ fn defender_history(ctx: &mut ScanContext) {
                     Finding::new(
                         Severity::Med,
                         "defender",
-                        "Windows Defender recorded a malware detection",
+                        "Windows Defender зафиксировал обнаружение вредоносного файла",
                     )
-                    .evidence(format!("threat: {safe_threat}"))
-                    .evidence(format!("resource: {safe_resource}"))
+                    .evidence(format!("угроза: {safe_threat}"))
+                    .evidence(format!("объект: {safe_resource}"))
                     .evidence(
-                        "Defender found a file matching known malware. Depending on the action \
-                         taken, the payload may still be present on disk.",
+                        "Defender нашёл файл, совпавший с известным вредоносным кодом. В \
+                         зависимости от принятых мер полезная нагрузка может остаться на диске.",
                     )
                     .remediation(
-                        "Locate the named resource and remove it after capturing its hash if it \
-                         matters.",
+                        "Найдите указанный объект и удалите его, сняв при необходимости его хеш.",
                     ),
                 );
             }
@@ -1336,7 +1345,7 @@ fn defender_detail(fields: &EventFields) -> String {
         .or_else(|| field(fields, "Product Name"))
         .unwrap_or_default();
     if candidate.is_empty() {
-        "no detail fields present".to_string()
+        "подробных полей нет".to_string()
     } else {
         sanitize(candidate, MAX_DATA_VALUE)
     }
@@ -1382,7 +1391,7 @@ fn task_registration(ctx: &mut ScanContext) {
         );
 
         let when = if fields.time_created.is_empty() {
-            "an unknown time".to_string()
+            "время неизвестно".to_string()
         } else {
             sanitize(&fields.time_created, MAX_DATA_VALUE)
         };
@@ -1391,18 +1400,19 @@ fn task_registration(ctx: &mut ScanContext) {
             Finding::new(
                 Severity::Med,
                 "scheduled-task",
-                "Scheduled task was registered",
+                "Задача планировщика была зарегистрирована",
             )
-            .evidence(format!("task: {safe_path}"))
-            .evidence(format!("author: {safe_author}"))
-            .evidence(format!("registered: {when}"))
+            .evidence(format!("задача: {safe_path}"))
+            .evidence(format!("автор: {safe_author}"))
+            .evidence(format!("зарегистрирована: {when}"))
             .evidence(
-                "A newly registered task is a persistence entry. Task Scheduler shows the author \
-                 and the time, which is usually enough to tell an updater from an implant.",
+                "Заново зарегистрированная задача - это точка автозапуска. Планировщик \
+                 показывает автора и время, чего обычно хватает, чтобы отличить средство \
+                 обновления от импланта.",
             )
             .remediation(
-                "Inspect the task's action and confirm the author. Delete it if neither is \
-                 recognised.",
+                "Изучите действие задачи и подтвердите автора. Удалите её, если ни то, ни \
+                 другое вам не знакомо.",
             ),
         );
     }

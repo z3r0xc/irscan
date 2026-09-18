@@ -15,6 +15,7 @@
 //! All strings that come from the registry are expanded (`REG_EXPAND_SZ` is the norm
 //! here) and sanitised before they reach a record, a finding or the raw section.
 
+use crate::collect::services::location_label;
 use crate::collect::{CollectError, Collector};
 use crate::model::{Finding, HaystackKind, ScanContext, Severity};
 use crate::win::reg::{self, RegValue, RootKey};
@@ -118,18 +119,19 @@ impl Collector for AutorunsCollector {
                         Finding::new(
                             Severity::Med,
                             "persistence",
-                            "Unnamed Run autostart value",
+                            "Значение автозапуска без имени в ветке Run",
                         )
                         .evidence(format!(
-                            "{origin} contains a value with an empty name running: {command}"
+                            "{origin} содержит значение с пустым именем, запускающее: {command}"
                         ))
                         .evidence(
-                            "Legitimate installers always name their Run values; an empty name \
-                             is used to make the entry hard to find in Regedit.",
+                            "Добросовестные установщики всегда дают своим значениям Run имя; \
+                             пустое имя используют, чтобы запись было трудно найти в Regedit.",
                         )
                         .remediation(format!(
-                            "Inspect {origin}; if the command is not recognised, export the key \
-                             for evidence and then delete the unnamed value."
+                            "Проверьте {origin}; если команда не опознана, выгрузите ветку для \
+                             сохранения доказательств и только после этого удалите безымянное \
+                             значение."
                         )),
                     );
                 }
@@ -159,17 +161,20 @@ impl Collector for AutorunsCollector {
                     Finding::new(
                         Severity::High,
                         "persistence",
-                        format!("Winlogon {value_name} deviates from the default"),
+                        format!(
+                            "Значение Winlogon {value_name} отличается от значения по умолчанию"
+                        ),
                     )
                     .evidence(format!("HKLM\\{winlogon}\\{value_name} = {actual}"))
-                    .evidence(format!("Documented default: {expected}"))
+                    .evidence(format!("значение по умолчанию: {expected}"))
                     .evidence(
-                        "Winlogon runs this value in every interactive session, so a changed \
-                         value starts the attacker's program at every logon.",
+                        "Winlogon запускает это значение в каждом интерактивном сеансе, поэтому \
+                         изменённое значение запускает программу злоумышленника при каждом \
+                         входе в систему.",
                     )
                     .remediation(
-                        "Restore the documented default, but only after saving the current \
-                         value: it names what is running as the logged-on user.",
+                        "Верните значение по умолчанию, но только сохранив текущее: в нём \
+                         указано, что именно работает от имени вошедшего пользователя.",
                     ),
                 );
             }
@@ -207,17 +212,19 @@ impl Collector for AutorunsCollector {
                 Finding::new(
                     Severity::High,
                     "persistence",
-                    "AppInit_DLLs is set (DLL injection into every GUI process)",
+                    "Задан AppInit_DLLs (внедрение DLL во все процессы с графическим интерфейсом)",
                 )
                 .evidence(format!("HKLM\\{subkey}\\AppInit_DLLs = {dlls}"))
                 .evidence(
-                    "AppInit_DLLs injects the named DLL into every process that loads user32.dll. \
-                     Microsoft ships this feature off and empty on Windows 10; software that \
-                     needs it is rare outside of malware and old accessibility tools.",
+                    "AppInit_DLLs внедряет указанную DLL в каждый процесс, загружающий \
+                     user32.dll. Microsoft поставляет эту возможность выключенной и пустой \
+                     в Windows 10; программы, которым она нужна, редки за пределами \
+                     вредоносного кода и старых средств доступности.",
                 )
                 .remediation(
-                    "Identify each DLL listed here. Unless it is a product you deliberately \
-                     installed and can name, clear AppInit_DLLs and re-check for the file.",
+                    "Опознайте каждую DLL из этого списка. Если это не продукт, который вы \
+                     сознательно установили и можете назвать, очистите AppInit_DLLs и \
+                     перепроверьте наличие файла.",
                 ),
             );
         }
@@ -236,7 +243,8 @@ impl Collector for AutorunsCollector {
         for (index, image) in subkeys.iter().enumerate() {
             if index >= MAX_IFEO_SUBKEYS {
                 ctx.warn(format!(
-                    "autoruns: image file execution options truncated at {MAX_IFEO_SUBKEYS} subkeys"
+                    "autoruns: список Image File Execution Options усечён на {MAX_IFEO_SUBKEYS} \
+                     подразделах"
                 ));
                 break;
             }
@@ -267,16 +275,18 @@ impl Collector for AutorunsCollector {
                 Finding::new(
                     Severity::High,
                     "persistence",
-                    format!("Image File Execution Options Debugger set for {image}"),
+                    format!("Для образа {image} задан Debugger в Image File Execution Options"),
                 )
                 .evidence(format!("HKLM\\{sub}\\Debugger = {debugger}"))
                 .evidence(
-                    "A Debugger value silently redirects every launch of this image to the named \
-                     program. It is the standard way to run code in place of a trusted binary.",
+                    "Значение Debugger молча перенаправляет каждый запуск этого образа на \
+                     указанную программу. Это штатный способ выполнить свой код вместо \
+                     доверенного двоичного файла.",
                 )
                 .remediation(
-                    "Delete the Debugger value unless it belongs to a debugger you are actively \
-                     using. Then verify the original image is the one Microsoft shipped.",
+                    "Удалите значение Debugger, если оно не принадлежит отладчику, которым вы \
+                     сейчас пользуетесь. Затем убедитесь, что исходный образ — тот, который \
+                     поставила Microsoft.",
                 ),
             );
         }
@@ -314,21 +324,22 @@ impl Collector for AutorunsCollector {
                     Finding::new(
                         Severity::Med,
                         "persistence",
-                        "BootExecute is not the default",
+                        "Значение BootExecute не совпадает со значением по умолчанию",
                     )
                     .evidence(format!(
                         "HKLM\\{session_manager}\\BootExecute = {}",
                         entries.join(" | ")
                     ))
-                    .evidence("Default on Windows 10: autocheck autochk *")
+                    .evidence("значение по умолчанию в Windows 10: autocheck autochk *")
                     .evidence(
-                        "BootExecute runs natively before the Win32 subsystem starts, so it is \
-                         invisible to most monitoring and cannot be removed while the system runs.",
+                        "BootExecute выполняется нативно, до запуска подсистемы Win32, поэтому \
+                         он невидим для большинства средств мониторинга и не может быть удалён \
+                         при работающей системе.",
                     )
                     .remediation(
-                        "Restore the default value (`autocheck autochk *`) after recording what \
-                         was there. A native executable named here must be treated as a rootkit \
-                         until identified.",
+                        "Верните значение по умолчанию (`autocheck autochk *`), записав сначала \
+                         то, что там было. Нативный исполняемый файл, названный здесь, следует \
+                         считать rootkit, пока не доказано обратное.",
                     ),
                 );
             }
@@ -349,11 +360,11 @@ fn describe(root: RootKey, subkey: &str) -> (String, &'static str) {
         RootKey::Hku => "HKU",
     };
     let label = if subkey.contains("Wow6432Node") {
-        "32-bit view"
+        "32-разрядное представление"
     } else if subkey.ends_with("RunOnce") {
-        "runs once"
+        "выполняется один раз"
     } else {
-        "runs at logon"
+        "запускается при входе в систему"
     };
     (format!("{prefix}\\{subkey}"), label)
 }
@@ -371,39 +382,43 @@ fn report_command(ctx: &mut ScanContext, command: &str, location: &str, name: &s
         return;
     };
     let trust_line = match trusted {
-        Some(true) => "signature: valid".to_string(),
-        Some(false) => "signature: NOT valid".to_string(),
-        None => "signature: could not be verified".to_string(),
+        Some(true) => "подпись: действительна".to_string(),
+        Some(false) => "подпись: НЕ действительна".to_string(),
+        None => "подпись: проверить не удалось".to_string(),
     };
     // The title says why this entry is a finding. A privileged location is only
     // reported when the image is unsigned; the other two are reported for the
     // location itself, so the old "user-writable" wording is no longer accurate.
     let title = match exe_location {
         crate::rules::Location::Drop => {
-            format!("Autostart entry runs from a transit directory: {name}")
+            format!("Автозапуск {name} работает из каталога для временных файлов")
         }
         crate::rules::Location::AppData => {
-            format!("Autostart entry runs from a per-user data directory: {name}")
+            format!("Автозапуск {name} работает из каталога данных приложений")
         }
         crate::rules::Location::Privileged => {
-            format!("Autostart entry runs an unsigned executable: {name}")
+            format!("Автозапуск {name} запускает исполняемый файл без действительной подписи")
         }
     };
     let rationale = if exe_location == crate::rules::Location::Privileged {
-        "The executable is not validly signed, so the publisher cannot be established."
+        "Исполняемый файл не имеет действительной подписи, поэтому издателя установить нельзя."
     } else {
-        "A user-writable path can be modified by any process running as this user, so an \
-         autostart entry there executes whatever replaces the file, with no prompt."
+        "Файл в доступном на запись каталоге может подменить любой процесс от имени этого \
+         пользователя, поэтому автозапуск оттуда выполняет то, что подставили вместо \
+         файла, — без каких-либо запросов."
     };
     ctx.add(
         Finding::new(severity, "persistence", title)
-            .evidence(format!("{location}\\{name} = {command}"))
-            .evidence(format!("Executable: {exe}"))
+            .evidence(format!("ветка реестра: {location}"))
+            .evidence(format!("значение: {name}"))
+            .evidence(format!("команда: {command}"))
+            .evidence(format!("путь к файлу: {exe}"))
+            .evidence(format!("расположение: {}", location_label(exe_location)))
             .evidence(trust_line)
             .evidence(rationale)
             .remediation(
-                "If this is not software you installed, move the file to external media for \
-                 analysis and disable the autostart entry.",
+                "Если это не установленная вами программа, скопируйте файл на внешний носитель \
+                 для анализа и отключите автозапуск.",
             ),
     );
 }

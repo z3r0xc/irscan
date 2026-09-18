@@ -15,6 +15,184 @@
      would be a string no translator can find. Names of the product, collector
      identifiers, host names and service names are data: they are never keys. -->
 
+<!-- =========================================================================
+     WIZARD  - owned by the wizard block in app.js and the wizard section at the
+     end of style.css. Everything between this marker and the one below was
+     inserted as one piece; nothing inside header/main/footer belongs to it.
+
+     The window's top-level flow: what this is, what it is doing, what came out
+     of it - one step at a time, over the report. The report stays laid out in
+     the window underneath and the last step simply uncovers it, so the findings
+     list and the detail pane keep working exactly as they did.
+
+     Which step is on screen is `#wizard`'s `wizard-cover` class plus `is-on` on
+     one panel; app.js is the only thing that sets either. The text between the
+     tags is the fallback for a browser that never runs the script - the real
+     strings come from the dictionary via applyI18n() and t().
+
+     `#step-dots` is empty on purpose: its four dots are built by app.js so they
+     are text nodes it can replace in place instead of elements it has to
+     recreate. They are decoration - the step number in words beside them is the
+     fact, and it is the one a screen reader gets.
+     ====================================================================== -->
+<div id="wizard" class="wizard-cover">
+
+  <div class="wz-rail">
+    <div class="wz-steps">
+      <span id="step-dots"></span>
+      <span class="wz-step-label is-on" id="wz-step1" data-i18n="wz.step1">STEP 1 OF 3 · WHAT THIS IS</span>
+      <span class="wz-step-label" id="wz-step2" data-i18n="wz.step2">STEP 2 OF 3 · SCANNING</span>
+      <span class="wz-step-label" id="wz-step3" data-i18n="wz.step3">STEP 3 OF 3 · REPORT</span>
+    </div>
+  </div>
+
+  <div class="wz-body">
+
+    <!-- 1. Welcome. Three short lines and one button. -->
+    <section class="wz-panel is-on" id="wstep-welcome" aria-labelledby="wz-welcome-title">
+      <div class="wz-inner">
+        <span class="wz-chip" data-i18n="wz.welcome.readonly">Read only</span>
+        <h1 class="wz-title" id="wz-welcome-title" data-i18n="wz.welcome.title">
+          A check for hidden monitoring software
+        </h1>
+        <p class="wz-lede" data-i18n="wz.welcome.l1">
+          This reads the logs, services, tasks and network connections of this machine
+          and shows what is watching it.
+        </p>
+        <p class="wz-lede" data-i18n="wz.welcome.l2">
+          It changes nothing: it only reads. Nothing on this step touches the disk,
+          the registry or the network.
+        </p>
+        <p class="wz-lede" data-i18n="wz.welcome.l3">
+          The check takes a few seconds. Its report can be saved to a file.
+        </p>
+        <div class="wz-actions">
+          <button type="button" class="btn-primary" id="wz-start">
+            <span class="glyph" aria-hidden="true">&#9679;</span>
+            <span data-i18n="wz.welcome.start">Start the check</span>
+          </button>
+          <!-- The report itself is reachable without the tour. This step is the
+               only one with no way forward except starting a scan, and a screen
+               whose single button is the only exit is a screen that traps
+               whoever came for the report rather than the introduction. -->
+          <button type="button" class="btn-ghost" id="wz-report"
+                  data-i18n="wz.welcome.report">Open the report</button>
+        </div>
+        <p class="wz-hint" data-i18n="foot.notRun">
+          A clean result is not proof of a clean machine. No scan has been run yet, so
+          nothing on this screen has been checked.
+        </p>
+      </div>
+    </section>
+
+    <!-- 2. Scanning. It runs in the background; this step only reports on it,
+         and it is the only step that can be left early: a progress screen
+         nobody can leave is a worse screen than no progress screen. -->
+    <section class="wz-panel" id="wstep-scan" aria-labelledby="wz-scan-title">
+      <div class="wz-inner">
+        <div class="wz-scan">
+          <span class="wz-frame" id="wz-frame" aria-hidden="true">&#9675;</span>
+          <div class="wz-scan-main">
+            <h1 class="wz-title" id="wz-scan-title" data-i18n="wz.scan.title">Scanning</h1>
+            <p class="wz-lede" data-i18n="wz.scan.wait">
+              You do not have to wait: the scan runs in the background and the window
+              stays responsive. Findings are already being collected and are laid out
+              on the next step.
+            </p>
+            <div class="wz-facts">
+              <!-- Filled by app.js. The collector identifier inside is the core's
+                   own name for the collector and stays Latin: it is what someone
+                   greps for in a log. The word in front of it is chrome. -->
+              <span id="wz-collector"></span>
+              <span id="wz-reported"></span>
+              <span id="wz-elapsed"></span>
+              <span id="wz-collected"></span>
+            </div>
+            <!-- The identifier alone, live: a screen reader should hear which
+                 collector changed, not the clock and the count four times a
+                 second. -->
+            <span class="visually-hidden" id="wz-live" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+        <!-- A hairline, not a meter: see .wz-barline in style.css. The count in
+             the facts row above is the reading; this is the rule under it. -->
+        <div class="wz-barline" aria-hidden="true"></div>
+        <div class="wz-actions">
+          <button type="button" class="btn-ghost" id="wz-skip" data-i18n="wz.skip">Skip to the report</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Result and export. The other two steps are a tour; this one is the
+         product, and the findings list and detail pane are the part of it just
+         below - `wizard-cover` comes off here, which is what reveals them, so
+         this panel deliberately does not repeat the list. It is the summary
+         above it, what to do next, and the two save controls. -->
+    <section class="wz-panel" id="wstep-result" aria-labelledby="wz-result-title">
+      <div class="wz-inner wz-result-wrap">
+        <h1 class="wz-title" id="wz-result-title" data-i18n="wz.result.title">The check finished</h1>
+
+        <!-- Counts, what they mean and what to do next, built by app.js from the
+             payload's own numbers. Only the words around the numbers are this
+             file's. -->
+        <div class="wz-summary" id="wz-summary"></div>
+
+        <div class="wz-result-actions">
+          <button type="button" class="btn-primary" id="wz-save-txt" disabled>
+            <span data-i18n="save.report">Save report</span>
+          </button>
+          <button type="button" class="btn-ghost" id="wz-save-json" disabled>
+            <span data-i18n="save.json">Save JSON</span>
+          </button>
+          <!-- Read the report before saving it. The report is already rendered
+               and held by the window, so this costs no work; a person checking
+               a claim should not have to write a file to do it. -->
+          <button type="button" class="btn-ghost" id="wz-view-btn" disabled aria-expanded="false"
+                  aria-controls="wz-view-panel">
+            <span data-i18n="wz.result.view">View report</span>
+          </button>
+          <button type="button" class="btn-ghost" id="wz-back" data-i18n="wz.result.fromStep">Back to the start</button>
+          <!-- The one control that takes the overlay off the report. Without
+               it the report is only reachable by a URL parameter, which is a
+               route a person sitting at the window does not have. -->
+          <button type="button" class="btn-ghost" id="wz-done" data-i18n="wz.result.done">Close the summary</button>
+        </div>
+
+        <p class="wz-note" data-i18n="wz.result.saveHint">
+          The file is written on this machine - the tool runs offline and sends nothing
+          anywhere. Pick a path in the system dialog; the path it used appears below.
+        </p>
+
+        <!-- Where the path control goes when this host has no dialog plugin, and
+             where the answer goes either way. Both sit inside the step, beside
+             the buttons that caused them, rather than in a header that has
+             already emptied itself back to the host name. -->
+        <!-- The rendered report, in full, without a file on disk. `<pre>` because
+             the report is fixed-width plain text: its columns only line up in a
+             monospaced face, and re-flowing it would break the layout the file
+             itself has. Populated on first open and kept, so reopening is instant. -->
+        <div class="wz-view-wrap" id="wz-view-panel" hidden>
+          <div class="wz-view-bar">
+            <span class="wz-view-title" data-i18n="wz.result.viewTitle">Report contents</span>
+            <button type="button" class="btn-ghost btn-small" id="wz-view-close"
+                    data-i18n="wz.result.viewClose">Hide</button>
+          </div>
+          <pre class="wz-view" id="wz-view" tabindex="0"
+               aria-labelledby="wz-view-panel"></pre>
+        </div>
+
+        <div class="wz-pick" id="wz-pick"></div>
+        <div class="wz-saved-wrap" id="wz-saved-wrap" data-op="ok" hidden>
+          <span class="wz-saved-label" data-i18n="wz.result.saveLabel">Path</span>
+          <span class="wz-saved" id="wz-saved"></span>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+<!-- ============================ end of WIZARD =========================== -->
+
 <header class="topbar">
   <div class="mark">
     <span class="mark-name">IRSCAN</span>
@@ -44,9 +222,12 @@
 
 <main class="app" id="app">
 
-  <!-- Verdict band. Its height is reserved in CSS so the panes below never move. -->
+  <!-- Verdict band. Its height is reserved in CSS so the panes below never move.
+       The band caption is the only place the word "verdict" appears; the three
+       counters below it are also the finding list's filter totals, so a severity
+       count is printed exactly once and the filter buttons carry labels only. -->
   <section class="band" aria-labelledby="verdict-heading">
-    <h2 class="visually-hidden" id="verdict-heading" data-i18n="band.verdict">Verdict</h2>
+    <p class="caption" id="verdict-heading" data-i18n="band.verdict">Verdict</p>
 
     <div class="counts">
       <div class="count" data-sev="high">
@@ -79,48 +260,56 @@
     </div>
   </section>
 
-  <!-- "Since last time". A reserved-height row of main, always present, never
-       hidden: the strip's three states occupy the same box so the panes below
-       never move when delta arrives. `d` jumps here. -->
+  <!-- Run status: one reserved box with two states. While a scan runs the live
+       progress list is on screen; when it ends, the "since last time" strip takes
+       its place in the same box. Exactly one of the two is ever visible, which is
+       why starting or finishing a scan cannot move the panes. `d` jumps here. -->
+  <div class="status">
+
+  <!-- "Since last time". Always present, never hidden: the strip's three states
+       occupy the same box. -->
   <section class="delta" id="delta" data-state="idle" tabindex="-1"
            aria-labelledby="delta-heading">
-    <h2 class="visually-hidden" id="delta-heading" data-i18n="delta.heading">Changes since the last scan</h2>
+    <p class="caption" id="delta-heading" data-i18n="delta.heading">Changes since the last scan</p>
+    <span class="chip chip-new" id="delta-chip" hidden data-i18n="delta.chip">NEW PRESENCE</span>
     <div class="delta-line">
       <span class="delta-mark" id="delta-mark" aria-hidden="true"></span>
       <span class="delta-summary" id="delta-summary">Nothing to compare yet.</span>
-      <span class="chip chip-new" id="delta-chip" hidden data-i18n="delta.chip">NEW PRESENCE</span>
-      <span class="delta-since" id="delta-since"></span>
+      <span class="delta-since micro" id="delta-since"></span>
     </div>
     <div class="delta-groups" id="delta-groups"></div>
     <p class="delta-hint" id="delta-hint" data-i18n="delta.hint">Click any entry to copy its name.</p>
   </section>
 
-  <!-- Progress. Never a spinner: the collector names are the progress. -->
+  <!-- Progress. Never a spinner: the collector names are the progress. Both this
+       and the delta strip are in the .status box above; renderProgress() decides
+       which of the two is on screen. -->
   <section class="progress" id="progress" hidden aria-labelledby="progress-heading">
-    <h2 class="micro progress-head" id="progress-heading">
-      <span data-i18n="progress.heading">Scanning</span> <span id="progress-summary"></span>
+    <h2 class="caption progress-head" id="progress-heading">
+      <span data-i18n="progress.heading">Scanning</span>
+      <span class="micro" id="progress-summary"></span>
     </h2>
     <ul class="progress-list" id="progress-list"></ul>
   </section>
+
+  </div><!-- /status -->
 
   <!-- Two panes. Min-heights are set in CSS: content arrival cannot resize them. -->
   <section class="panes" aria-label="Findings" data-i18n-aria="findings.label">
 
     <div class="pane-list">
       <div class="pane-head">
+        <!-- Labels only. The counts these buttons used to repeat are the band's
+             three counters, a centimetre above them. -->
         <div class="filters" role="group" aria-label="Filter by severity" data-i18n-aria="findings.filterLabel">
-          <button type="button" class="filter is-on" data-filter="all" aria-pressed="true">
-            <span data-i18n="filter.all">All</span> <span class="filter-count" id="f-all">&mdash;</span>
-          </button>
-          <button type="button" class="filter" data-filter="high" aria-pressed="false">
-            <span data-i18n="sev.high">HIGH</span> <span class="filter-count" id="f-high">&mdash;</span>
-          </button>
-          <button type="button" class="filter" data-filter="med" aria-pressed="false">
-            <span data-i18n="sev.med">MED</span> <span class="filter-count" id="f-med">&mdash;</span>
-          </button>
-          <button type="button" class="filter" data-filter="info" aria-pressed="false">
-            <span data-i18n="sev.info">INFO</span> <span class="filter-count" id="f-info">&mdash;</span>
-          </button>
+          <button type="button" class="filter is-on" data-filter="all" aria-pressed="true"
+                  data-i18n="filter.all">All</button>
+          <button type="button" class="filter" data-filter="high" aria-pressed="false"
+                  data-i18n="sev.high">HIGH</button>
+          <button type="button" class="filter" data-filter="med" aria-pressed="false"
+                  data-i18n="sev.med">MED</button>
+          <button type="button" class="filter" data-filter="info" aria-pressed="false"
+                  data-i18n="sev.info">INFO</button>
         </div>
         <div class="search-wrap">
           <input type="search" id="search" class="search" placeholder="Search titles and evidence"
@@ -149,13 +338,19 @@
 </main>
 
 <footer class="footer">
+  <!-- Two drawers, two labelled groups: each count sits with the thing it counts
+       instead of floating between the warnings and the raw-data toggle. -->
   <div class="footer-row">
-    <span class="micro" data-i18n="warn.heading">Warnings</span>
-    <span class="footer-count" id="warn-count">&mdash;</span>
-    <button type="button" class="btn-ghost" id="raw-btn" aria-expanded="false" aria-controls="raw-block">
-      <span class="glyph" aria-hidden="true">&#9675;</span> <span data-i18n="raw.toggle">Raw data</span>
-    </button>
-    <span class="footer-raw-count" id="raw-count"></span>
+    <span class="footer-pair">
+      <span class="micro" data-i18n="warn.heading">Warnings</span>
+      <span class="footer-count" id="warn-count">&mdash;</span>
+    </span>
+    <span class="footer-pair">
+      <button type="button" class="btn-ghost" id="raw-btn" aria-expanded="false" aria-controls="raw-block">
+        <span data-i18n="raw.toggle">Raw data</span>
+      </button>
+      <span class="footer-raw-count" id="raw-count"></span>
+    </span>
   </div>
 
   <p class="notproven" id="notproven">

@@ -15,9 +15,17 @@
 // Test code uses panic!, unwrap and expect as its assertion mechanism; production code
 // keeps the strict lints - the same policy as the library crate.
 #![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used))]
+// Without this the binary is linked as a console application (subsystem 3), so Windows
+// attaches a console window and the user sees a black terminal beside the interface -
+// reported exactly that way. `windows` selects the GUI subsystem, which is the same
+// information the CLI's opposite choice carries: a CLI must have a console, a GUI must not.
+// Debug builds keep the console, because a panic in a windowed process is otherwise
+// invisible.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod act;
 mod host;
+mod locale;
 mod monitor;
 mod scan;
 mod view;
@@ -66,6 +74,10 @@ struct AppInfo {
     collectors: usize,
     elevated: bool,
     history_path: String,
+    /// `"ru"` or `"en"`, from the machine's own locale. This is the only place the
+    /// window can learn it: WebView2 reports `en-US` through `navigator.language` even
+    /// on a Russian Windows.
+    language: &'static str,
 }
 
 #[tauri::command]
@@ -81,6 +93,7 @@ fn app_info() -> AppInfo {
         collectors: irscan::collect::default_set(false, Vec::new()).len(),
         elevated: irscan::win::is_elevated(),
         history_path: monitor::history_path().display().to_string(),
+        language: locale::language(),
     }
 }
 
@@ -121,6 +134,43 @@ fn export_report(
 
     std::fs::write(&target, body).map_err(|e| format!("cannot write {}: {e}", target.display()))?;
     Ok(target.display().to_string())
+}
+
+/// The rendered report of the scan the window is showing, as text.
+///
+/// The same bytes `export_report` would write, without writing them. The window already
+/// holds the report - the scan command renders it once and keeps it - so "show me the
+/// report" costs a clone rather than a re-render, and what the user reads in the window
+/// is guaranteed to be what the file would contain, because it is literally the same
+/// string.
+///
+/// `cursor` must match, for the same reason it must on export: a window showing scan N
+/// must never display the report of scan N-1.
+///
+/// The `json` flag selects the machine-readable form. It is offered because the file
+/// dialog offers both, and a user who wants to check a field before saving should not
+/// have to save a file to do it.
+#[tauri::command]
+fn report_text(
+    state: tauri::State<'_, LastScan>,
+    cursor: u64,
+    json: bool,
+) -> Result<String, String> {
+    let guard = state
+        .inner
+        .lock()
+        .map_err(|_| "the last scan is unavailable".to_string())?;
+    let data = guard
+        .as_ref()
+        .ok_or_else(|| "there is no completed scan to show".to_string())?;
+
+    scan::may_export(data, cursor)?;
+
+    Ok(if json {
+        data.json.clone()
+    } else {
+        data.text.clone()
+    })
 }
 
 /// What a containment action produced, plus where its undo record went.
@@ -200,6 +250,7 @@ fn main() {
             scan,
             app_info,
             export_report,
+            report_text,
             disable_service,
             remove_autostart
         ])
@@ -212,5 +263,34 @@ fn main() {
              \"WebView2 Runtime\" from Microsoft."
         );
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The binary must be a GUI application, not a console one.
+    ///
+    /// The user reported a black terminal window opening beside the interface, and the PE
+    /// header explained it: the binary was linked with subsystem 3 (`WINDOWS_CUI`), so
+    /// Windows attached a console. The attribute that fixes it is invisible in review - it
+    /// is a cfg-gated crate attribute - and dropping it would silently bring the console
+    /// back. Verified independently: the release binary's PE header now reads subsystem 2,
+    /// and no `conhost.exe` child is created when it starts.
+    ///
+    /// The check is on the source because the attribute only affects release linkage, while
+    /// this test runs in the debug profile where the console is deliberately kept.
+    #[test]
+    fn the_release_binary_is_a_gui_application_not_a_console_one() {
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("windows_subsystem = \"windows\""),
+            "the GUI must select the windows subsystem or a console window appears"
+        );
+        // Gated on release on purpose: a panicking windowed process is invisible, so debug
+        // builds keep the console to show it.
+        assert!(
+            source.contains("cfg_attr(not(debug_assertions), windows_subsystem"),
+            "the console must stay available in debug builds"
+        );
     }
 }

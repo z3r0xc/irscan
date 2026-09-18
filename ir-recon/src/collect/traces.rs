@@ -49,9 +49,9 @@ pub enum Confidence {
 impl Confidence {
     pub fn label(self) -> &'static str {
         match self {
-            Confidence::Confirmed => "confirmed path",
-            Confidence::Likely => "likely path",
-            Confidence::Unverified => "unverified path",
+            Confidence::Confirmed => "подтверждённый путь",
+            Confidence::Likely => "вероятный путь",
+            Confidence::Unverified => "непроверенный путь",
         }
     }
 }
@@ -76,15 +76,15 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "AnyDesk",
         template: r"%ProgramData%\AnyDesk\connection_trace.txt",
-        what_it_proves:
-            "one line per session: AnyDesk ID, remote address and session start/stop time",
+        what_it_proves: "одна строка на сеанс: идентификатор AnyDesk, удалённый адрес и время \
+             начала/окончания сеанса",
         confidence: Confidence::Confirmed,
     },
     TraceArtifact {
         product: "AnyDesk",
         template: r"%APPDATA%\AnyDesk\connection_trace.txt",
-        what_it_proves:
-            "one line per session: AnyDesk ID, remote address and session start/stop time",
+        what_it_proves: "одна строка на сеанс: идентификатор AnyDesk, удалённый адрес и время \
+             начала/окончания сеанса",
         confidence: Confidence::Confirmed,
     },
     // `ad_svc.trace` sits next to the connection trace in service installs; the
@@ -92,7 +92,7 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "AnyDesk",
         template: r"%ProgramData%\AnyDesk\ad_svc.trace",
-        what_it_proves: "AnyDesk service trace: service start/stop and connection attempts",
+        what_it_proves: "трассировка службы AnyDesk: запуск/остановка службы и попытки подключения",
         confidence: Confidence::Likely,
     },
     // --- TeamViewer ------------------------------------------------------------
@@ -101,20 +101,23 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "TeamViewer",
         template: r"%ProgramFiles%\TeamViewer\Connections_incoming.txt",
-        what_it_proves: "every incoming TeamViewer session with the remote peer id and address",
+        what_it_proves: "каждый входящий сеанс TeamViewer с идентификатором и адресом \
+                         удалённого узла",
         confidence: Confidence::Confirmed,
     },
     TraceArtifact {
         product: "TeamViewer",
         template: r"%PROGRAMFILES(X86)%\TeamViewer\Connections_incoming.txt",
-        what_it_proves: "every incoming TeamViewer session with the remote peer id and address",
+        what_it_proves: "каждый входящий сеанс TeamViewer с идентификатором и адресом \
+                         удалённого узла",
         confidence: Confidence::Confirmed,
     },
     // QuickSupport / Host write the same file under the user profile.
     TraceArtifact {
         product: "TeamViewer",
         template: r"%APPDATA%\TeamViewer\Connections_incoming.txt",
-        what_it_proves: "incoming session log for a per-user (QuickSupport / Host) install",
+        what_it_proves: "журнал входящих сеансов для установки на одного пользователя \
+                         (QuickSupport / Host)",
         confidence: Confidence::Likely,
     },
     // --- RustDesk --------------------------------------------------------------
@@ -123,7 +126,8 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "RustDesk",
         template: r"%APPDATA%\RustDesk\config\",
-        what_it_proves: "RustDesk.toml holds the rendezvous/relay server and the device peer id",
+        what_it_proves:
+            "в RustDesk.toml хранятся сервер рандеву/ретрансляции и идентификатор устройства",
         confidence: Confidence::Confirmed,
     },
     // --- ScreenConnect / ConnectWise Control -----------------------------------
@@ -132,7 +136,8 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "ScreenConnect / ConnectWise Control",
         template: r"%PROGRAMFILES(X86)%\ScreenConnect Client *\",
-        what_it_proves: "ScreenConnect client install directory; the name contains the instance id",
+        what_it_proves:
+            "каталог установки клиента ScreenConnect; его имя содержит идентификатор экземпляра",
         confidence: Confidence::Confirmed,
     },
     // --- Supremo ---------------------------------------------------------------
@@ -142,20 +147,20 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "Supremo",
         template: r"%PROGRAMFILES(X86)%\Supremo\",
-        what_it_proves: "Supremo install directory (log file names inside are not confirmed)",
+        what_it_proves: "каталог установки Supremo (имена лог-файлов внутри не подтверждены)",
         confidence: Confidence::Likely,
     },
     // --- LiteManager -----------------------------------------------------------
     TraceArtifact {
         product: "LiteManager",
         template: r"%ProgramFiles%\LiteManager\",
-        what_it_proves: "LiteManager server install directory",
+        what_it_proves: "каталог установки сервера LiteManager",
         confidence: Confidence::Likely,
     },
     TraceArtifact {
         product: "LiteManager",
         template: r"%PROGRAMFILES(X86)%\LiteManager\",
-        what_it_proves: "LiteManager server install directory (32-bit install)",
+        what_it_proves: "каталог установки сервера LiteManager (32-разрядная установка)",
         confidence: Confidence::Likely,
     },
     // --- Remote Utilities ------------------------------------------------------
@@ -163,13 +168,13 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "Remote Utilities",
         template: r"%PROGRAMFILES(X86)%\Remote Utilities - Host\",
-        what_it_proves: "Remote Utilities host install directory (RUTserv.exe)",
+        what_it_proves: "каталог установки узла Remote Utilities (RUTserv.exe)",
         confidence: Confidence::Likely,
     },
     TraceArtifact {
         product: "Remote Utilities",
         template: r"%ProgramFiles%\Remote Utilities - Host\",
-        what_it_proves: "Remote Utilities host install directory (RUTserv.exe)",
+        what_it_proves: "каталог установки узла Remote Utilities (RUTserv.exe)",
         confidence: Confidence::Likely,
     },
     // --- AeroAdmin -------------------------------------------------------------
@@ -180,7 +185,7 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "AeroAdmin",
         template: r"%APPDATA%\AeroAdmin\",
-        what_it_proves: "possible AeroAdmin settings/log directory (path unverified)",
+        what_it_proves: "возможный каталог настроек/логов AeroAdmin (путь не проверен)",
         confidence: Confidence::Unverified,
     },
     // --- Ammyy Admin -----------------------------------------------------------
@@ -190,7 +195,8 @@ pub const ARTIFACTS: &[TraceArtifact] = &[
     TraceArtifact {
         product: "Ammyy Admin",
         template: r"%APPDATA%\Ammyy\",
-        what_it_proves: "possible Ammyy Admin directory (path unverified; state is registry-based)",
+        what_it_proves:
+            "возможный каталог Ammyy Admin (путь не проверен; состояние хранится в реестре)",
         confidence: Confidence::Unverified,
     },
 ];
@@ -224,7 +230,7 @@ fn examine(ctx: &mut ScanContext, artifact: &TraceArtifact, path: &Path, raw: &m
     ctx.note(
         HaystackKind::Path,
         safe_path.clone(),
-        format!("{} evidence file", artifact.product),
+        format!("файл-свидетельство {}", artifact.product),
     );
     raw.push(format!(
         "{} [{}] {}",
@@ -235,19 +241,25 @@ fn examine(ctx: &mut ScanContext, artifact: &TraceArtifact, path: &Path, raw: &m
 
     // A directory is evidence of installation, not of use: there is nothing to read.
     if path.is_dir() {
-        raw.push(format!("  directory present: {}", artifact.what_it_proves));
+        raw.push(format!(
+            "  каталог присутствует: {}",
+            artifact.what_it_proves
+        ));
         ctx.add(
             Finding::new(
                 Severity::Med,
                 "trace",
-                format!("{} installation found: {}", artifact.product, safe_path),
+                format!("Обнаружена установка {}: {}", artifact.product, safe_path),
             )
-            .evidence(format!("directory: {safe_path}"))
+            .evidence(format!("каталог: {safe_path}"))
             .evidence(artifact.what_it_proves)
-            .evidence(format!("path confidence: {}", artifact.confidence.label()))
+            .evidence(format!(
+                "достоверность пути: {}",
+                artifact.confidence.label()
+            ))
             .remediation(
-                "The product is installed. If it was not installed deliberately, treat the \
-                 machine as remotely controllable until it is removed.",
+                "Продукт установлен. Если он установлен не намеренно, считайте машину \
+                 удалённо управляемой, пока его не удалят.",
             ),
         );
         return;
@@ -256,7 +268,7 @@ fn examine(ctx: &mut ScanContext, artifact: &TraceArtifact, path: &Path, raw: &m
     let content = match read_capped(path, MAX_TRACE_BYTES) {
         Some(text) => text,
         None => {
-            ctx.warn(format!("traces: could not read {}", safe_path));
+            ctx.warn(format!("traces: не удалось прочитать {}", safe_path));
             String::new()
         }
     };
@@ -267,20 +279,26 @@ fn examine(ctx: &mut ScanContext, artifact: &TraceArtifact, path: &Path, raw: &m
     let mut finding = Finding::new(
         Severity::Med,
         "trace",
-        format!("{} evidence file present: {}", artifact.product, safe_path),
+        format!(
+            "Присутствует файл-свидетельство {}: {}",
+            artifact.product, safe_path
+        ),
     )
-    .evidence(format!("path: {safe_path}"))
+    .evidence(format!("путь: {safe_path}"))
     .evidence(artifact.what_it_proves)
-    .evidence(format!("path confidence: {}", artifact.confidence.label()));
+    .evidence(format!(
+        "достоверность пути: {}",
+        artifact.confidence.label()
+    ));
 
     if content.trim().is_empty() {
-        finding = finding.evidence("file is empty");
+        finding = finding.evidence("файл пуст");
     }
     for endpoint in endpoints.iter().take(MAX_ENDPOINT_EVIDENCE) {
-        finding = finding.evidence(format!("endpoint: {endpoint}"));
+        finding = finding.evidence(format!("удалённая точка: {endpoint}"));
     }
     for line in &connections {
-        finding = finding.evidence(format!("connection: {line}"));
+        finding = finding.evidence(format!("подключение: {line}"));
     }
 
     // Every hostname goes into the haystack so the signature database can name the
@@ -295,17 +313,17 @@ fn examine(ctx: &mut ScanContext, artifact: &TraceArtifact, path: &Path, raw: &m
     if has_public_endpoint(&endpoints) {
         finding.severity = Severity::High;
         finding.title = format!(
-            "{} was used to reach a public address: {}",
+            "{} использовался для подключения к публичному адресу: {}",
             artifact.product, safe_path
         );
         finding = finding.evidence(
-            "at least one recorded endpoint is a public (routable) address, so control came \
-             from outside the local network",
+            "как минимум одна записанная точка является публичным (маршрутизируемым) адресом, \
+             то есть управление шло из-за пределов локальной сети",
         );
     }
 
     finding = finding.remediation(
-        "Preserve this file before removing anything: it is the record of who connected.",
+        "Сохраните этот файл перед любыми удалениями: это запись о том, кто подключался.",
     );
     ctx.add(finding);
 }

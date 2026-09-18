@@ -48,7 +48,7 @@ impl Collector for TasksCollector {
         if !root.is_dir() {
             return Err(CollectError::new(
                 "tasks",
-                format!("task store not found: {}", root.display()),
+                format!("хранилище задач не найдено: {}", root.display()),
             ));
         }
 
@@ -56,7 +56,7 @@ impl Collector for TasksCollector {
         walk_tasks(&root, "", 0, &mut files, ctx);
         if files.len() >= MAX_TASKS {
             ctx.warn(format!(
-                "tasks: stopped after {} task definitions",
+                "задачи: перебор остановлен после {} определений задач",
                 MAX_TASKS
             ));
         }
@@ -65,13 +65,16 @@ impl Collector for TasksCollector {
         for (name, file) in files {
             let Some(xml) = read_task_file(&file) else {
                 ctx.warn(format!(
-                    "tasks: unreadable or oversized definition: {}",
+                    "задачи: определение не читается или слишком велико: {}",
                     file.display()
                 ));
                 continue;
             };
             let Some(mut record) = parse_task_xml(&name, &xml) else {
-                ctx.warn(format!("tasks: not a task definition: {}", file.display()));
+                ctx.warn(format!(
+                    "задачи: это не определение задачи: {}",
+                    file.display()
+                ));
                 continue;
             };
             record.path = sanitize(&file.display().to_string(), MAX_STRING);
@@ -80,14 +83,14 @@ impl Collector for TasksCollector {
             ctx.note(
                 HaystackKind::TaskName,
                 record.name.clone(),
-                "scheduled task",
+                "задача планировщика",
             );
             for action in record.action.split(" ;; ") {
                 if let Some(exe) = task_action_executable(action) {
                     ctx.note(
                         HaystackKind::Path,
                         exe,
-                        format!("task action: {}", record.name),
+                        format!("команда задачи: {}", record.name),
                     );
                 }
             }
@@ -101,8 +104,8 @@ impl Collector for TasksCollector {
             // The store exists but nothing was read from it, which is what happens without
             // elevation. Saying so here keeps "no tasks" and "could not look" apart.
             lines.push(
-                "no task definition was read; without elevation the task store is unreadable, \
-                 so this is not evidence that no task exists"
+                "ни одно определение задачи не прочитано; без повышенных прав хранилище \
+                 задач недоступно, так что это не доказывает отсутствие задач"
                     .to_string(),
             );
         }
@@ -164,8 +167,34 @@ pub fn parse_task_xml(task_name: &str, xml: &str) -> Option<crate::model::TaskRe
 
 /// A task is hidden when its `Hidden` element is true. Task Scheduler's own UI does
 /// not show such a task, which is precisely why the report calls it out.
+///
+/// Windows hides a large number of its own tasks this way - `.NET Framework NGEN`,
+/// the AppX deployment cleanup, `UsbCeip`, the Data Integrity scans, well over fifty on
+/// a stock install - and every one of them is ordinary. Reporting them lifts the count
+/// of a healthy machine into the nineties, which is the failure mode this whole report
+/// exists to avoid: a reader who sees sixty "hidden task" lines stops reading them, and
+/// the one hidden task that *was* planted goes past with the rest.
+///
+/// A task under `\Microsoft\` is Microsoft's own namespace. Windows installs and
+/// owns it; a third party writing a persistence entry there is not the shape of the
+/// threat - the shape is a hidden task in a neutral or vendor path, which is what this
+/// now reports. The Microsoft tasks are still collected and still listed under RAW
+/// DATA, so nothing is hidden from the operator, only unalarmed.
 pub fn is_hidden_task(record: &TaskRecord) -> bool {
-    record.hidden
+    record.hidden && !is_microsoft_namespace(&record.name)
+}
+
+/// Does the task's path sit in Microsoft's own namespace?
+///
+/// `\Microsoft\...` and a bare `\Microsoft` are both Microsoft's. The check is on
+/// the leading component only, so a task named `\MicrosoftFake\x` - which would be
+/// the whole point of picking a lookalike name - is NOT treated as Microsoft's.
+fn is_microsoft_namespace(name: &str) -> bool {
+    let trimmed = name.strip_prefix('\\').unwrap_or(name);
+    match trimmed.split_once('\\') {
+        Some((first, _)) => first.eq_ignore_ascii_case("Microsoft"),
+        None => trimmed.eq_ignore_ascii_case("Microsoft"),
+    }
 }
 
 /// The executable a task action runs, with any argument tail removed.
@@ -435,7 +464,7 @@ fn walk_tasks(
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
-        ctx.warn(format!("tasks: cannot read {}", dir.display()));
+        ctx.warn(format!("задачи: не удалось прочитать {}", dir.display()));
         return;
     };
     for entry in entries.flatten() {
@@ -511,17 +540,67 @@ fn task_action_severity(trusted: Option<bool>, exe: &str) -> Option<Severity> {
 /// Only then does "the payload was deleted" mean anything: a path that still contains
 /// an unexpanded `%VAR%`, or a bare file name, has not been resolved yet and must not
 /// be reported as a deleted payload.
+///
+/// A path whose own directory names a superseded build is excluded too. Product
+/// updaters that install into a versioned directory - OneDrive is the common one -
+/// leave their scheduled task pointing at the build they were running when it was
+/// written, and the next update deletes that directory. The task then outlives its
+/// file for a reason that has nothing to do with an intruder, and reporting it as
+/// "the payload deleted itself" puts a HIGH finding on an ordinary update. It is
+/// still reported, at its location and signature, by the caller.
 fn missing_drive_payload(exe: &str) -> bool {
-    if is_drive_path(exe) {
-        match Path::new(exe).try_exists() {
-            Ok(present) => present.not(),
-            // Unreadable (permissions, a disconnected drive): report nothing, because
-            // "cannot tell" must not be presented as "deleted".
-            Err(_) => false,
-        }
-    } else {
-        false
+    if !is_drive_path(exe) || superseded_by_versioned_install(exe) {
+        return false;
     }
+    match Path::new(exe).try_exists() {
+        Ok(present) => present.not(),
+        // Unreadable (permissions, a disconnected drive): report nothing, because
+        // "cannot tell" must not be presented as "deleted".
+        Err(_) => false,
+    }
+}
+
+/// Does the file sit in a `...\<name>\<version>\file.exe` directory whose version
+/// component is a dotted number, and does a sibling directory of the same product
+/// hold the same file name under a different version?
+///
+/// The check has to see the replacement, not just the shape: a dropped payload in
+/// `%LOCALAPPDATA%\SomeAgent\1.2.3\agent.exe` has the same shape as an updated
+/// OneDrive, and only the presence of a newer sibling tells them apart. Requiring
+/// three numeric components keeps `...\1.2\x.exe` - a far more plausible drop path -
+/// out of it.
+fn superseded_by_versioned_install(exe: &str) -> bool {
+    let path = Path::new(exe);
+    let Some(version_dir) = path.parent() else {
+        return false;
+    };
+    let (Some(vendor_dir), Some(version), Some(file)) = (
+        version_dir.parent(),
+        version_dir.file_name().and_then(|s| s.to_str()),
+        path.file_name(),
+    ) else {
+        return false;
+    };
+    if !is_dotted_version(version) {
+        return false;
+    }
+    let Ok(siblings) = std::fs::read_dir(vendor_dir) else {
+        return false;
+    };
+    siblings.flatten().any(|entry| {
+        entry.file_name() != version_dir.file_name().unwrap_or_default()
+            && entry.path().join(file).try_exists().unwrap_or(false)
+    })
+}
+
+/// A version directory such as `26.129.0706.0004`: at least three dot-separated parts,
+/// every one of them digits.
+fn is_dotted_version(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() >= 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Decide the single finding (if any) a task deserves, strongest condition first.
@@ -534,21 +613,30 @@ fn classify_task(record: &TaskRecord) -> Option<Finding> {
     // Most decisive first: the persistence entry outliving its payload is the
     // shape of an agent that deleted itself after use. Only a fully qualified drive
     // path is checked; an unexpanded `%VAR%` has not been resolved yet.
-    if missing_drive_payload(&exe_expanded) {
+    //
+    // Microsoft's own tasks are exempt from this one too. `\Microsoft\Windows\
+    // UpdateOrchestrator\USO_UxBroker` points at `MusNotification.exe`, which a
+    // Windows component-removal or an update can delete while the task stays behind;
+    // measured on the author's host, that put a HIGH "the executable no longer
+    // exists" finding on a stock Windows task. The file's absence is real, its
+    // meaning is not: a task Microsoft installed and Microsoft left dangling is not
+    // evidence of an intruder, and a HIGH finding that a reader learns to ignore
+    // costs more than the finding is worth. It stays visible under RAW DATA.
+    if !is_microsoft_namespace(&record.name) && missing_drive_payload(&exe_expanded) {
         return Some(
             Finding::new(
                 Severity::High,
                 "scheduled-task",
-                "Scheduled task points at an executable that no longer exists",
+                "Задача планировщика указывает на исполняемый файл, которого больше нет",
             )
-            .evidence(format!("task: {}", record.name))
-            .evidence(format!("expected image: {safe_exe}"))
-            .evidence(format!("action: {}", record.action))
+            .evidence(format!("задача: {}", record.name))
+            .evidence(format!("ожидаемый файл: {safe_exe}"))
+            .evidence(format!("команда: {}", record.action))
             .remediation(
-                "A task whose payload has been deleted is a common self-cleaning pattern: \
-                 the persistence entry survives the binary that did the work.",
+                "Задача, чей файл уже удалён, — обычный признак самоочистки: запись \
+                 автозапуска переживает двоичный файл, который выполнял работу.",
             )
-            .remediation("Check the task's history and delete it if it is not yours."),
+            .remediation("Проверьте журнал этой задачи и удалите её, если она не ваша."),
         );
     }
 
@@ -562,34 +650,38 @@ fn classify_task(record: &TaskRecord) -> Option<Finding> {
         None
     };
     if let Some(severity) = task_action_severity(trusted, &safe_exe) {
-        let title = match location {
-            crate::rules::Location::Drop => "Scheduled task runs from a transit directory",
-            crate::rules::Location::AppData => "Scheduled task runs from a per-user data directory",
-            crate::rules::Location::Privileged => "Scheduled task runs an unsigned executable",
-        };
+        let label = crate::collect::services::location_label(location);
+        let title = format!("Задача планировщика запускается из {label}");
         return Some(
             Finding::new(severity, "scheduled-task", title)
-                .evidence(format!("task: {}", record.name))
-                .evidence(format!("action: {safe_action}"))
-                .evidence(format!("image: {safe_exe}"))
+                .evidence(format!("задача: {}", record.name))
+                .evidence(format!("команда: {safe_action}"))
+                .evidence(format!("путь к файлу: {safe_exe}"))
                 .remediation(
-                    "A task that runs a payload from a transit or user-writable directory \
-                     can be replaced by any process running as that user (FR-13).",
+                    "Задачу, запускающую файл из каталога для временных файлов или из каталога, \
+                     куда может писать пользователь, может подменить любой процесс этого \
+                     пользователя (FR-13).",
                 )
-                .remediation("Verify the file's signature and publisher before trusting the task."),
+                .remediation("Проверьте подпись и издателя файла, прежде чем доверять задаче."),
         );
     }
 
     if is_hidden_task(record) {
         return Some(
-            Finding::new(Severity::Med, "scheduled-task", "Hidden scheduled task")
-                .evidence(format!("task: {}", record.name))
-                .evidence(format!("action: {safe_action}"))
-                .remediation(
-                    "Hidden tasks are not shown by Task Scheduler's UI. They are used by some \
-                 legitimate updaters, but also by monitoring agents that want to stay unseen.",
-                )
-                .remediation("Delete the task if neither the action nor the author is recognised."),
+            Finding::new(
+                Severity::Med,
+                "scheduled-task",
+                "Скрытая задача планировщика",
+            )
+            .evidence(format!("задача: {}", record.name))
+            .evidence(format!("команда: {safe_action}"))
+            .evidence(format!("автор: {}", record.author))
+            .remediation(
+                "Скрытые задачи не показывает интерфейс планировщика. Ими пользуются \
+                     некоторые легальные средства обновления, но и агенты слежения, \
+                     которые хотят остаться незамеченными.",
+            )
+            .remediation("Удалите задачу, если ни её команда, ни её автор вам не знакомы."),
         );
     }
 
@@ -724,6 +816,142 @@ mod tests {
         // Unterminated quote yields nothing rather than a guess.
         assert_eq!(task_action_executable("\"C:\\broken"), None);
         assert_eq!(task_action_executable("   "), None);
+    }
+
+    /// A task whose file was removed by a product update is not "a payload that deleted
+    /// itself".
+    ///
+    /// Measured on the author's host: OneDrive's startup task pointed at
+    /// `...\Microsoft OneDrive\26.129.0706.0004\OneDriveLauncher.exe` while the
+    /// installed builds were 26.153 and 26.158, so the named directory was gone and the
+    /// task became a HIGH finding reading "the executable no longer exists". The rule
+    /// has to see the *replacement* to fire, otherwise it also whitelists a genuine drop
+    /// in a versioned directory.
+    #[test]
+    fn a_versioned_install_replaced_by_a_newer_one_is_not_a_deleted_payload() {
+        let root = std::env::temp_dir().join("irscan-versioned-install-test");
+        let vendor = root.join("Microsoft OneDrive");
+        let old_dir = vendor.join("26.129.0706.0004");
+        let new_dir = vendor.join("26.153.0809.0004");
+        std::fs::create_dir_all(&old_dir).expect("old dir");
+        std::fs::create_dir_all(&new_dir).expect("new dir");
+        // The new build carries the file; the old one's copy is gone, as it is after an update.
+        std::fs::write(new_dir.join("OneDriveLauncher.exe"), b"MZ").expect("new build file");
+
+        let gone = old_dir
+            .join("OneDriveLauncher.exe")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            !missing_drive_payload(&gone),
+            "a path superseded by a newer build of the same product must not read as deleted"
+        );
+
+        // The naming has to be the *same product*, so a versioned directory under a
+        // vendor that has no replacement is still reported. This is the shape the rule
+        // must not excuse: a drop in `%LOCALAPPDATA%\Vendor\1.2.3\agent.exe` with no
+        // second version beside it.
+        let lonely_root = root.join("Lonely Vendor");
+        let lonely_dir = lonely_root.join("1.2.3");
+        std::fs::create_dir_all(&lonely_dir).expect("lonely dir");
+        let lonely = lonely_dir.join("agent.exe").to_string_lossy().into_owned();
+        assert!(
+            missing_drive_payload(&lonely),
+            "a versioned path with no replacement must still be reported"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Only a dotted numeric directory counts as a version, so a plausible drop path
+    /// such as `...\1.2\payload.exe` is not silently excused.
+    /// Windows hides dozens of its own tasks; a report that flags them is unreadable.
+    ///
+    /// Measured on the author's host: 59 findings, every one a `\\Microsoft\\Windows\\...`
+    /// task that Windows itself marks `<Hidden>true</Hidden>` - `.NET Framework NGEN`,
+    /// the AppX cleanup, `UsbCeip`, the Data Integrity scans. They are ordinary, and a
+    /// reader who sees sixty of them stops reading the list, which is where a planted
+    /// one would hide.
+    #[test]
+    fn windows_own_hidden_tasks_are_not_reported_as_hidden() {
+        let task = |name: &str| TaskRecord {
+            name: name.to_string(),
+            state: String::new(),
+            hidden: true,
+            enabled: true,
+            author: String::new(),
+            action: String::new(),
+            path: String::new(),
+        };
+
+        assert!(!is_hidden_task(&task(
+            r"\Microsoft\Windows\.NET Framework\NGEN"
+        )));
+        assert!(!is_hidden_task(&task(
+            r"\Microsoft\Windows\AppxDeploymentClient\UCPD velocity"
+        )));
+        assert!(!is_hidden_task(&task(r"\Microsoft")));
+        assert!(!is_hidden_task(&task(r"\microsoft\anything")));
+
+        // A hidden task anywhere else is exactly what the finding is for.
+        assert!(is_hidden_task(&task(r"\SystemUpdate\svc")));
+        assert!(is_hidden_task(&task(r"\OneDrive Startup Task")));
+        // A lookalike namespace is not Microsoft's - that is the whole point of it.
+        assert!(is_hidden_task(&task(r"\MicrosoftFake\x")));
+        assert!(is_hidden_task(&task(r"\Microsoft Windows\x")));
+    }
+
+    /// A Microsoft task whose payload was removed is not a HIGH finding.
+    ///
+    /// Measured on the author's host: `\\Microsoft\\Windows\\UpdateOrchestrator\\USO_UxBroker`
+    /// points at `MusNotification.exe`, which a Windows component removal had deleted
+    /// while the task stayed behind. The file really is gone - the finding was not
+    /// wrong about that - but it is a stock Windows task, and a HIGH "the executable
+    /// no longer exists" on stock Windows teaches the reader to skip the line that
+    /// matters.
+    #[test]
+    fn a_microsoft_task_with_a_missing_payload_is_not_high() {
+        let missing = r"C:\definitely\not\here\payload.exe";
+        let record = |name: &str| TaskRecord {
+            name: name.to_string(),
+            state: "Enabled".to_string(),
+            hidden: false,
+            enabled: true,
+            author: "Microsoft".to_string(),
+            action: missing.to_string(),
+            path: String::new(),
+        };
+
+        let ms = classify_task(&record(
+            r"\Microsoft\Windows\UpdateOrchestrator\USO_UxBroker",
+        ));
+        assert!(
+            !matches!(ms, Some(ref f) if f.severity == Severity::High),
+            "a Microsoft task must not be reported HIGH for a missing payload, got {ms:?}"
+        );
+
+        // The same task outside Microsoft's namespace is exactly the shape the rule
+        // exists for, and must stay HIGH.
+        let other = classify_task(&record(r"\SystemUpdate\svc"));
+        assert!(
+            matches!(other, Some(ref f) if f.severity == Severity::High),
+            "an identical task outside Microsoft's namespace must still be HIGH"
+        );
+    }
+
+    #[test]
+    fn only_dotted_numeric_directories_are_treated_as_versions() {
+        assert!(is_dotted_version("26.129.0706.0004"));
+        assert!(is_dotted_version("1.2.3"));
+        assert!(
+            !is_dotted_version("26.129"),
+            "two parts is not enough to be a build dir"
+        );
+        assert!(!is_dotted_version("1.2"));
+        assert!(!is_dotted_version("v1.2.3"));
+        assert!(!is_dotted_version("26.129.0706.0004-beta"));
+        assert!(!is_dotted_version(""));
+        assert!(!is_dotted_version(".."));
     }
 
     #[test]

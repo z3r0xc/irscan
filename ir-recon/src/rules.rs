@@ -292,46 +292,53 @@ pub fn verdict(findings: &[Finding], warnings: usize) -> Verdict {
 
     let headline = if high > 0 {
         format!(
-            "{high} high-severity finding(s): concrete signs of covert monitoring or remote control."
+            "{high} находок уровня \"критично\": это прямые признаки скрытого наблюдения \
+             или удалённого управления."
         )
     } else if med > 0 {
-        format!("{med} finding(s) need review; none of them is conclusive on its own.")
+        format!(
+            "{med} находок требуют ручной проверки; по отдельности ни одна из них \
+             ничего не доказывает."
+        )
     } else {
-        "No indicators were found by these checks. That is NOT proof the machine is clean: \
-         a kernel-mode rootkit or a renamed agent with no registry trace can hide from every \
-         user-mode API used here."
+        "Ничего подозрительного этими проверками не найдено. Это НЕ доказывает, что машина \
+         чиста: rootkit в режиме ядра или переименованный агент без следов в реестре не \
+         видны ни одному из опрошенных интерфейсов пользовательского режима."
             .to_string()
     };
 
     let mut headline = headline;
     if warnings > 0 {
         headline.push_str(&format!(
-            " ({warnings} collector warning(s) - some checks did not run; see the report.)"
+            " ({warnings} проверок не выполнилось - часть данных отсутствует, см. отчёт.)"
         ));
     }
 
     let recommendation = vec![
-        "Disconnect the machine from the network first: it stops screen uploads and remote \
-         control immediately and destroys no local evidence."
+        "Сначала отключите машину от сети: это сразу остановит выгрузку экрана и удалённое \
+         управление и при этом не уничтожит ни одного локального следа."
             .to_string(),
-        "Do not delete anything yet. Copy the report and its evidence lines to external media."
+        "Пока ничего не удаляйте. Скопируйте отчёт вместе со строками доказательств на \
+         внешний носитель."
             .to_string(),
-        "If a known monitoring/remote-control product was identified, remove it with that \
-         product's own uninstaller (some require a removal password from whoever installed it)."
+        "Если опознан известный продукт наблюдения или удалённого доступа, удаляйте его \
+         штатным деинсталлятором этого продукта (некоторые требуют пароль удаления от \
+         того, кто их устанавливал)."
             .to_string(),
-        "If an unknown agent was found - above all an unsigned binary in a user-writable path \
-         with an active outbound connection - treat the machine as fully compromised. Only a \
-         clean OS install from external media removes a modern RAT reliably."
+        "Если найден неизвестный агент - в первую очередь неподписанный файл в доступной \
+         на запись папке с активным исходящим соединением - считайте машину полностью \
+         скомпрометированной. Надёжно убрать современный RAT позволяет только чистая \
+         переустановка системы с внешнего носителя."
             .to_string(),
-        "Change every password from a DIFFERENT, known-clean device, starting with email, \
-         because email is the reset channel for everything else. Enable MFA and revoke \
-         active sessions and tokens."
+        "Смените все пароли с ДРУГОГО, заведомо чистого устройства, начиная с почты: \
+         именно почта служит каналом сброса для всего остального. Включите двухфакторную \
+         аутентификацию и отзовите активные сессии и токены."
             .to_string(),
-        "Check the router (admin password, firmware, port forwards) and every other device \
-         on the network."
+        "Проверьте роутер (пароль администратора, прошивку, проброс портов) и все \
+         остальные устройства в сети."
             .to_string(),
-        "Re-run this scan after remediation and compare: the same findings reappearing means \
-         the persistence survived."
+        "После устранения запустите проверку заново и сравните отчёты: те же находки \
+         снова означают, что механизм закрепления уцелел."
             .to_string(),
     ];
 
@@ -563,22 +570,22 @@ mod tests {
         ];
         let v = verdict(&findings, 0);
         assert_eq!((v.high, v.med, v.info), (1, 1, 1));
-        assert!(v.headline.contains("high-severity"));
+        assert!(v.headline.contains("критично"));
         assert!(v.recommendation.len() >= 5);
     }
 
     #[test]
     fn verdict_without_high_does_not_alarm() {
         let v = verdict(&[Finding::new(Severity::Med, "cat", "b")], 0);
-        assert!(v.headline.contains("need review"));
-        assert!(!v.headline.contains("high-severity"));
+        assert!(v.headline.contains("ручной проверки"));
+        assert!(!v.headline.contains("критично"));
     }
 
     #[test]
     fn clean_verdict_states_its_own_limits() {
         let v = verdict(&[], 0);
         assert!(
-            v.headline.contains("NOT proof"),
+            v.headline.contains("НЕ доказывает"),
             "must not claim the host is clean"
         );
         assert_eq!((v.high, v.med, v.info), (0, 0, 0));
@@ -587,6 +594,6 @@ mod tests {
     #[test]
     fn warnings_are_surfaced_in_the_headline() {
         let v = verdict(&[], 2);
-        assert!(v.headline.contains("2 collector warning"));
+        assert!(v.headline.contains("2 проверок не выполнилось"));
     }
 }

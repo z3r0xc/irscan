@@ -86,7 +86,7 @@ impl Collector for InputFiltersCollector {
             }
 
             if !saw_filters {
-                push_line(&mut lines, "  (no filters registered)");
+                push_line(&mut lines, "  (фильтры не зарегистрированы)");
             }
         }
 
@@ -106,25 +106,32 @@ impl Collector for InputFiltersCollector {
                 &format!("HKLM\\{KEYBOARD_LAYOUT}\\Scancode Map = {description}"),
             );
             ctx.add(
-                Finding::new(Severity::Med, "input", "Keyboard Scancode Map is present")
-                    .evidence(format!(
-                        "HKLM\\{KEYBOARD_LAYOUT}\\Scancode Map is set ({description})"
-                    ))
-                    .evidence(
-                        "This value remaps physical scan codes in the kernel, before any driver \
-                         sees the keystroke. Windows does not create it; it exists only because \
-                         something wrote it.",
-                    )
-                    .remediation(
-                        "Check the Windows Keyboard Layout settings for a custom layout you or an \
-                         admin added. If nobody recognises it, export the value for evidence and \
-                         delete it, then reboot.",
+                Finding::new(
+                    Severity::Med,
+                    "input",
+                    format!(
+                        "HKLM\\{KEYBOARD_LAYOUT}\\Scancode Map ({description}) — эта запись \
+                         переопределяет физические скан-коды клавиш"
                     ),
+                )
+                .evidence(format!(
+                    "HKLM\\{KEYBOARD_LAYOUT}\\Scancode Map задан: {description}"
+                ))
+                .evidence(
+                    "Эта запись переопределяет физические скан-коды в ядре, до того как \
+                     нажатие увидит любой драйвер. Windows её не создаёт; она существует \
+                     только потому, что её записал кто-то другой.",
+                )
+                .remediation(
+                    "Проверьте в настройках клавиатуры Windows раскладку, добавленную вами \
+                     или администратором. Если её никто не узнаёт, экспортируйте значение \
+                     как доказательство и удалите его, затем перезагрузите компьютер.",
+                ),
             );
         } else {
             push_line(
                 &mut lines,
-                "HKLM\\Keyboard Layout\\Scancode Map = (not set)",
+                "HKLM\\Keyboard Layout\\Scancode Map = (не задан)",
             );
         }
 
@@ -170,30 +177,32 @@ fn report_filters(
         let mut finding = Finding::new(
             severity,
             "input",
-            format!("Unknown {class_label} class filter driver: {name}"),
+            format!("Фильтр {name} неизвестен в классе устройств «{class_label}»: файл {origin}"),
         )
-        .evidence(format!("{origin}\\{value_name} = {}", filters.join(", ")))
+        .evidence(format!("имя фильтра: {name}"))
+        .evidence(format!("каталог класса: {origin}"))
         .evidence(format!(
-            "Registered as a {value_name} on the {class_label} device class {guid}."
+            "зарегистрирован как {value_name} в классе устройств {class_label} {guid}"
         ));
 
         if is_input_class {
             finding = finding.evidence(
-                "This driver is loaded on top of every keyboard and/or mouse device, so it sees \
-                 every keystroke and every pointer movement, and can inject its own. A filter \
-                 here is the mechanism a remote-control product uses to steer the cursor.",
+                "Этот драйвер загружается поверх каждого устройства класса «клавиатура» и/или \
+                 «мышь», поэтому он видит каждое нажатие и каждое движение указателя, а также \
+                 может отправлять собственные события. Именно так фильтр становится механизмом, \
+                 с помощью которого средство удалённого управления двигает курсор.",
             );
         } else {
             finding = finding.evidence(
-                "A filter on this class processes the device's data stream. On the display and \
-                 monitor classes that means it can capture the screen contents.",
+                "Фильтр этого класса обрабатывает поток данных устройства. В классах «дисплей» \
+                 и «монитор» это означает, что он может снимать содержимое экрана.",
             );
         }
 
         ctx.add(finding.remediation(
-            "Identify the product that owns this driver (its name is usually enough to search \
-             the vendor's site). Remove the product with its own uninstaller; do not delete the \
-             driver file alone, the filter entry would remain and block the device.",
+            "Определите продукт, которому принадлежит этот драйвер (его имени обычно достаточно, \
+             чтобы найти сайт производителя). Удаляйте продукт его собственным деинсталлятором: \
+             не удаляйте один файл драйвера, запись фильтра останется и заблокирует устройство.",
         ));
     }
 }

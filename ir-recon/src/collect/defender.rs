@@ -44,22 +44,22 @@ impl Collector for DefenderCollector {
         let exclusion_groups: &[(&str, &str, ExclusionKind)] = &[
             (
                 r"SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths",
-                "path",
+                "пути",
                 ExclusionKind::Path,
             ),
             (
                 r"SOFTWARE\Microsoft\Windows Defender\Exclusions\Processes",
-                "process",
+                "процессы",
                 ExclusionKind::Process,
             ),
             (
                 r"SOFTWARE\Microsoft\Windows Defender\Exclusions\Extensions",
-                "extension",
+                "расширения",
                 ExclusionKind::Extension,
             ),
             (
                 r"SOFTWARE\Policies\Microsoft\Windows Defender\Exclusions",
-                "policy path",
+                "пути (политика)",
                 ExclusionKind::Path,
             ),
         ];
@@ -75,17 +75,17 @@ impl Collector for DefenderCollector {
                 continue;
             }
 
-            ctx.note(HaystackKind::RegistryPath, *subkey, "Defender exclusions");
+            ctx.note(HaystackKind::RegistryPath, *subkey, "Исключения Defender");
             let origin = format!("HKLM\\{subkey}");
             push_line(
                 &mut lines,
-                &format!("{origin}: {} exclusion(s)", values.len()),
+                &format!("{origin}: исключений — {}", values.len()),
             );
 
             for (index, (name, _value)) in values.iter().enumerate() {
                 if index >= MAX_EXCLUSIONS {
                     ctx.warn(format!(
-                        "defender: exclusions under {subkey} truncated at {MAX_EXCLUSIONS}"
+                        "defender: список исключений в {subkey} усечён на {MAX_EXCLUSIONS}"
                     ));
                     break;
                 }
@@ -102,10 +102,13 @@ impl Collector for DefenderCollector {
         if !any_exclusion_key {
             // Not a problem: this is the expected state on a machine whose Defender
             // key is absent (third-party AV, or a policy that hides it).
-            push_line(&mut lines, "Defender exclusion keys: not present (normal)");
+            push_line(
+                &mut lines,
+                "Разделы исключений Defender: отсутствуют (это норма)",
+            );
             ctx.warn(
-                "defender: exclusion keys absent - Defender may be replaced by third-party \
-                 antivirus or the scan may be running without elevation",
+                "defender: разделы исключений отсутствуют — возможно, Defender заменён \
+                 сторонним антивирусом или проверка выполняется без повышения прав",
             );
         }
 
@@ -114,12 +117,12 @@ impl Collector for DefenderCollector {
             (
                 POLICIES_ROOT,
                 "DisableAntiSpyware",
-                "Windows Defender is disabled by policy",
+                "Windows Defender отключён политикой",
             ),
             (
                 r"SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection",
                 "DisableRealtimeMonitoring",
-                "Real-time protection is disabled by policy",
+                "Защита в реальном времени отключена политикой",
             ),
         ];
 
@@ -137,14 +140,14 @@ impl Collector for DefenderCollector {
                     Finding::new(Severity::High, "defender", *title)
                         .evidence(format!("HKLM\\{subkey}\\{value_name} = {value}"))
                         .evidence(
-                            "This value is set by policy. It survives the normal settings UI, so \
-                             the machine keeps running without protection even if it looks \
-                             enabled.",
+                            "Это значение задано политикой. Оно переживает обычный \
+                             интерфейс настроек, поэтому машина продолжает работать без \
+                             защиты, даже если внешне она выглядит включённой.",
                         )
                         .remediation(
-                            "Determine who set the policy (a management tool, or the person who \
-                             had access to the machine). Remove the value and reboot, then \
-                             confirm protection is on.",
+                            "Выясните, кто задал эту политику (средство управления или \
+                             человек, имевший доступ к машине). Удалите значение, \
+                             перезагрузитесь, затем убедитесь, что защита включена.",
                         ),
                 );
             }
@@ -157,13 +160,17 @@ impl Collector for DefenderCollector {
             pass_note(ctx, DEFENDER_ROOT);
             push_line(
                 &mut lines,
-                "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\ProductStatus: not present",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\ProductStatus: отсутствует",
             );
             ctx.raw_section("DEFENDER", lines);
             push_history(ctx);
             return Ok(());
         };
-        ctx.note(HaystackKind::RegistryPath, DEFENDER_ROOT, "Defender engine");
+        ctx.note(
+            HaystackKind::RegistryPath,
+            DEFENDER_ROOT,
+            "Механизм Defender",
+        );
         match status {
             RegValue::Dword(n) => {
                 push_line(
@@ -294,32 +301,35 @@ fn report_exclusion(
     let mut finding = Finding::new(
         severity,
         "defender",
-        format!("Defender exclusion ({label}): {item}"),
+        format!("Исключение в Windows Defender ({label}): {item}"),
     )
     .evidence(format!("{origin}\\{item}"))
     .evidence(
-        "Windows Defender does not scan, open or block anything matching this entry. Adding it \
-         is a supported feature, not an exploit, and it is a standard step taken by software \
-         that does not want to be found.",
+        "Windows Defender не проверяет, не открывает и не блокирует ничего, что \
+         соответствует этой записи. Добавление такого исключения — штатная \
+         возможность, а не эксплойт, и это обычный шаг для программы, которая не \
+         хочет быть найденной.",
     );
 
     if kind == ExclusionKind::Path {
         finding = finding.evidence(
-            "An exclusion on a path that the current user can write to means the owner of that \
-             directory can place any file there and it will never be scanned.",
+            "Исключение для пути, доступного текущему пользователю на запись, означает, \
+             что владелец этого каталога может положить туда любой файл, и он никогда \
+             не будет проверен.",
         );
     }
     if kind == ExclusionKind::Process {
         finding = finding.evidence(
-            "A process exclusion stops Defender from inspecting that process at all, including \
-             its memory and its command line.",
+            "Исключение для процесса полностью запрещает Defender проверять этот \
+             процесс, включая его память и командную строку.",
         );
     }
 
     ctx.note(HaystackKind::Path, item, origin);
     ctx.add(finding.remediation(
-        "Confirm each excluded path or process is a product you recognise and deliberately \
-         configured. Remove the entries you cannot account for, then run a full scan.",
+        "Убедитесь, что каждый исключённый путь или процесс — это продукт, который вы \
+         узнаёте и настроили намеренно. Удалите записи, которые не можете объяснить, \
+         затем запустите полную проверку.",
     ));
 }
 
@@ -341,11 +351,11 @@ fn push_history(ctx: &mut ScanContext) {
             ctx.note(
                 HaystackKind::RegistryPath,
                 crate::win::events::CHANNEL_DEFENDER,
-                "Defender detection history",
+                "История обнаружений Defender",
             );
             ctx.raw_section("DEFENDER EVENTS", lines);
         }
-        Err(e) => ctx.warn(format!("defender: detection history unavailable: {e}")),
+        Err(e) => ctx.warn(format!("defender: история обнаружений недоступна: {e}")),
     }
 }
 
@@ -354,7 +364,7 @@ fn pass_note(ctx: &mut ScanContext, subkey: &str) {
     ctx.note(
         HaystackKind::RegistryPath,
         subkey,
-        "Defender (absent/unreadable is normal)",
+        "Defender (отсутствие или невозможность чтения — это норма)",
     );
 }
 

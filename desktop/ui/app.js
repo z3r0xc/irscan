@@ -60,7 +60,7 @@
     "scan.busy": "Идёт проверка",
 
     /* Verdict band. */
-    "band.verdict": "ВЕРДИКТ",
+    "band.verdict": "ВЕРДИКТ ПО ПРОВЕРКЕ",
     "sev.high": "ВЫСОКИЙ",
     "sev.med": "СРЕДНИЙ",
     "sev.info": "ИНФО",
@@ -68,7 +68,7 @@
     "band.notRun": "Проверка ещё не запускалась",
 
     /* Change strip. */
-    "delta.heading": "ИЗМЕНЕНИЯ С ПРОШЛОЙ ПРОВЕРКИ",
+    "delta.heading": "С ПРОШЛОЙ ПРОВЕРКИ",
     "delta.chip": "НОВОЕ",
     "delta.chipTitle": "появилось то, что переживёт перезагрузку",
     "delta.idle": "Сравнивать пока не с чем.",
@@ -130,7 +130,7 @@
     /* Progress. */
     "progress.heading": "Проверка",
     "progress.reported": "отчитались {n} из них",
-    "progress.finished": "завершено, отчитались коллекторов: {n}",
+    "progress.finished": "завершена, отчитались коллекторов: {n}",
     "progress.unnamed": "(без имени)",
 
     /* Finding list. */
@@ -247,7 +247,78 @@
       "Службы с именем «{name}» на этой машине нет. Сверьте написание с разделом " +
       "SERVICES в сырых данных.",
     "err.noSuchAutostart":
-      "Записи автозапуска с именем «{value}» нет в {hive}\{key}. Возможно, она уже удалена."
+      "Записи автозапуска с именем «{value}» нет в {hive}\{key}. Возможно, она уже удалена.",
+
+    /* Wizard. The three steps the window walks through: what this is, what it
+       is doing, and what came out of it. The step number and name are printed
+       as text next to the dots, so the dots are a second telling of a fact the
+       screen already states in words. */
+    "wz.step1": "ШАГ 1 ИЗ 3 · ЧТО ЭТО",
+    "wz.step2": "ШАГ 2 ИЗ 3 · ПРОВЕРКА",
+    "wz.step3": "ШАГ 3 ИЗ 3 · ОТЧЁТ",
+    "wz.back": "Назад",
+    "wz.skip": "Перейти к отчету",
+
+    "wz.welcome.title": "Проверка на скрытое наблюдение",
+    "wz.welcome.l1":
+      "Программа читает журналы, службы, задачи и сетевые соединения этой машины " +
+      "и показывает то, что ищет за вами.",
+    "wz.welcome.l2":
+      "Она ничего не изменяет: только читает. Ни одно действие на этом шаге " +
+      "не трогает диск, реестр и сеть.",
+    "wz.welcome.l3": "Проверка занимает несколько секунд. Отчёт можно сохранить в файл.",
+    "wz.welcome.start": "Начать проверку",
+    "wz.welcome.readonly": "Только чтение",
+    "wz.welcome.report": "Открыть отчёт",
+
+    "wz.scan.title": "Идёт проверка",
+    "wz.scan.wait":
+      "Можно не ждать: проверка идёт в фоне, окно остаётся отзывчивым. " +
+      "Находки уже собираются и появятся разбором на следующем шаге.",
+    "wz.scan.collector": "Сейчас работает",
+    "wz.scan.reported": "Отчитались коллекторов: {n} из {total}",
+    "wz.scan.reportedUnknown": "Отчитались коллекторов: {n}",
+    "wz.scan.elapsed": "Прошло: {time}",
+    "wz.scan.findings": "Находок: {n}",
+    "wz.scan.starting": "запуск…",
+
+    "wz.result.title": "Проверка завершена",
+    "wz.result.high": "ВЫСОКИЙ",
+    "wz.result.med": "СРЕДНИЙ",
+    "wz.result.info": "ИНФО",
+    "wz.result.highNote": "Прямые признаки скрытого наблюдения или удалённого управления.",
+    "wz.result.medNote": "Подозрительно само по себе, но нужен контекст машины.",
+    "wz.result.infoNote": "Замечено, но решает не это: сведения для полноты картины.",
+    "wz.result.headlineClean":
+      "Признаков скрытого наблюдения не найдено. Это не доказывает, что машина " +
+      "чиста: часть проверок могла не запуститься, а руткит уровня ядра не виден " +
+      "ни одной из них.",
+    "wz.result.headlineIncomplete":
+      "Проверка завершилась не полностью: часть коллекторов не отработала. " +
+      "Пустой список находок после такой проверки ничего не доказывает - " +
+      "посмотрите предупреждения внизу окна или запустите проверку с правами администратора.",
+    "wz.result.headlineWarn":
+      "Найдено то, что требует внимания. Прочитайте находки на этом же экране " +
+      "ниже, прежде чем что-либо удалять: это доказательства.",
+    "wz.result.next": "ЧТО ДЕЛАТЬ ДАЛЬШЕ",
+    "wz.result.next1": "Разберите находки ниже на этом же экране: у каждой есть доказательства.",
+    "wz.result.next2":
+      "Сохраните отчёт на внешний носитель до того, как что-либо менять на машине.",
+    "wz.result.next3":
+      "Ничего не удаляйте до сохранения отчёта: файл на диске и есть доказательство.",
+    "wz.result.saveHint":
+      "Файл сохраняется на эту машину - программа работает без сети и ничего никуда " +
+      "не отправляет. Выберите путь в системном окне; готовый путь появится ниже.",
+    "wz.result.saveLabel": "Путь",
+    "wz.result.saved": "Отчёт сохранён: {path}",
+    "wz.result.savedJson": "JSON сохранён: {path}",
+    "wz.result.fromStep": "Вернуться к началу",
+    "wz.result.done": "Свернуть сводку",
+    "wz.result.view": "Показать отчёт",
+    "wz.result.viewTitle": "Содержимое отчёта",
+    "wz.result.viewClose": "Скрыть",
+    "wz.result.viewLoading": "Читаю отчёт…",
+    "wz.result.viewFail": "Не удалось показать отчёт: {message}"
   };
 
   var EN = {
@@ -276,14 +347,14 @@
     "scan.button": "Scan",
     "scan.busy": "Scanning",
 
-    "band.verdict": "Verdict",
+    "band.verdict": "Verdict of the run",
     "sev.high": "HIGH",
     "sev.med": "MED",
     "sev.info": "INFO",
     "rec.actions": "Recommended actions",
     "band.notRun": "No scan has been run yet.",
 
-    "delta.heading": "Changes since the last scan",
+    "delta.heading": "Since the last scan",
     "delta.chip": "NEW PRESENCE",
     "delta.chipTitle": "there is something here that survives a reboot",
     "delta.idle": "Nothing to compare yet.",
@@ -449,22 +520,115 @@
       "No service named \"{name}\" exists on this machine. Check the spelling against the " +
       "SERVICES section of the raw data.",
     "err.noSuchAutostart":
-      "No autostart entry named \"{value}\" under {hive}\\{key}. It may already have been removed."
+      "No autostart entry named \"{value}\" under {hive}\\{key}. It may already have been removed.",
+
+    "wz.step1": "STEP 1 OF 3 \u00B7 WHAT THIS IS",
+    "wz.step2": "STEP 2 OF 3 \u00B7 SCANNING",
+    "wz.step3": "STEP 3 OF 3 \u00B7 REPORT",
+    "wz.back": "Back",
+    "wz.skip": "Skip to the report",
+
+    "wz.welcome.title": "A check for hidden monitoring software",
+    "wz.welcome.l1":
+      "This reads the logs, services, tasks and network connections of this machine " +
+      "and shows what is watching it.",
+    "wz.welcome.l2":
+      "It changes nothing: it only reads. Nothing on this step touches the disk, " +
+      "the registry or the network.",
+    "wz.welcome.l3": "The check takes a few seconds. Its report can be saved to a file.",
+    "wz.welcome.start": "Start the check",
+    "wz.welcome.readonly": "Read only",
+    "wz.welcome.report": "Open the report",
+
+    "wz.scan.title": "Scanning",
+    "wz.scan.wait":
+      "You do not have to wait: the scan runs in the background and the window stays " +
+      "responsive. Findings are already being collected and are laid out on the next step.",
+    "wz.scan.collector": "Running now",
+    "wz.scan.reported": "{n} of {total} collectors have reported",
+    "wz.scan.reportedUnknown": "{n} collectors have reported",
+    "wz.scan.elapsed": "Elapsed: {time}",
+    "wz.scan.findings": "Findings so far: {n}",
+    "wz.scan.starting": "starting\u2026",
+
+    "wz.result.title": "The check finished",
+    "wz.result.high": "HIGH",
+    "wz.result.med": "MED",
+    "wz.result.info": "INFO",
+    "wz.result.highNote": "Direct signs of hidden monitoring or remote control.",
+    "wz.result.medNote": "Suspicious on its own, but it needs this machine's context.",
+    "wz.result.infoNote": "Noticed, not decisive: context for the picture as a whole.",
+    "wz.result.headlineClean":
+      "No signs of hidden monitoring were found. That is not proof of a clean machine: " +
+      "some checks may not have run, and a kernel-mode rootkit is invisible to all of them.",
+    "wz.result.headlineIncomplete":
+      "The scan did not finish: some collectors did not run. An empty finding list after " +
+      "an incomplete scan proves nothing - read the warnings at the bottom of the window, " +
+      "or run the check elevated.",
+    "wz.result.headlineWarn":
+      "Something was found that needs attention. Read the findings further down this same " +
+      "screen before removing anything: they are the evidence.",
+    "wz.result.next": "WHAT TO DO NEXT",
+    "wz.result.next1": "Work through the findings below, on this same screen: each one carries its evidence.",
+    "wz.result.next2": "Save the report to external media before changing anything on the machine.",
+    "wz.result.next3": "Remove nothing before the report is saved: the file on disk is the evidence.",
+    "wz.result.saveHint":
+      "The file is written on this machine - the tool runs offline and sends nothing " +
+      "anywhere. Pick a path in the system dialog; the path it used appears below.",
+    "wz.result.saveLabel": "Path",
+    "wz.result.saved": "Report saved: {path}",
+    "wz.result.savedJson": "JSON saved: {path}",
+    "wz.result.fromStep": "Back to the start",
+    "wz.result.done": "Close the summary",
+    "wz.result.view": "View report",
+    "wz.result.viewTitle": "Report contents",
+    "wz.result.viewClose": "Hide",
+    "wz.result.viewLoading": "Reading the report…",
+    "wz.result.viewFail": "The report could not be shown: {message}"
   };
 
-  /* Which language to speak. There is no switch in the UI: the machine already
-     answers this question, and a second source of truth for it could only
-     disagree with the shell's own locale. Anything that does not start with
-     "ru" is English, including an empty or unreadable navigator. */
-  var LANG = (function () {
+  /* Which language to speak.
+     The machine answers this question, and only the shell can read the answer: WebView2
+     reports `navigator.language` as `en-US` on a Russian Windows, so a front end that
+     decides for itself gets English on a Russian machine. `app_info` carries a
+     `language` field read from `GetUserDefaultLocaleName` instead, and boot() installs
+     that value here before the first paint. `navigator.language` is the fallback for a
+     plain browser, where there is no shell to ask: a tag beginning "ru" gets Russian,
+     anything else gets English. There is still no switch in the UI - one machine, one
+     answer. */
+  var LANG = "";
+
+  /** Turn a locale tag into a dictionary name. Same rule either way it is used. */
+  function languageOf(tag) {
+    return /^ru\b/i.test(String(tag || "")) ? "ru" : "en";
+  }
+
+  /** The tag a browser can offer, for the fallback path. */
+  function navigatorTag() {
     var n = null;
     try { n = typeof navigator !== "undefined" ? navigator : null; } catch (e) { n = null; }
-    var tag = n ? (n.languages && n.languages.length ? n.languages[0] : n.language) : "";
-    return /^ru\b/i.test(String(tag || "")) ? "ru" : "en";
-  }());
+    return n ? (n.languages && n.languages.length ? n.languages[0] : n.language) : "";
+  }
 
-  var DICT = LANG === "ru" ? RU : EN;
-  var FALLBACK = LANG === "ru" ? EN : RU;
+  var DICT = EN;
+  var FALLBACK = RU;
+
+  /**
+   * Install the language and point the dictionaries at it.
+   *
+   * Separate from boot() because the answer arrives asynchronously from the shell: the
+   * page paints in the fallback first and re-renders once `app_info` lands, so a slow or
+   * failing command shows a usable window instead of a blank one.
+   *
+   * @param {string} lang "ru" or "en"; anything else is treated as English.
+   */
+  function setLanguage(lang) {
+    LANG = lang === "ru" ? "ru" : "en";
+    DICT = LANG === "ru" ? RU : EN;
+    FALLBACK = LANG === "ru" ? EN : RU;
+  }
+
+  setLanguage(languageOf(navigatorTag()));
 
   /**
    * The one way a visible string is produced.
@@ -841,7 +1005,16 @@
     "filesystem", "events", "yara"
   ];
 
-  var DEMO_APP_INFO = { version: "0.1.0", needles: 1911, yaraRules: 6, collectors: 14 };
+  /* The demo answers with the tag the browser can see - the same fallback the real path
+     uses when there is no shell to ask. `languageOf` is a hoisted function declaration,
+     so it is callable here even though the language block sits further down the file. */
+  var DEMO_APP_INFO = {
+    version: "0.1.0",
+    needles: 1911,
+    yaraRules: 6,
+    collectors: 14,
+    language: languageOf(navigatorTag())
+  };
 
   /**
    * Which delta state the demo run reports. Read once from the URL so a
@@ -903,23 +1076,64 @@
     return Promise.reject(t("err.noCommand", { cmd: cmd }));
   }
 
+  /**
+   * A stand-in for the rendered report, for the browser harness only.
+   *
+   * Deliberately a few lines of the real layout - the box-drawing header, a
+   * finding with its evidence, the closing note - because the point of looking
+   * at it is to see whether the fixed-width columns survive the panel: the
+   * wrapping, the horizontal scroll and the line height can only be judged
+   * against text that has the real shape.
+   */
+  var DEMO_REPORT_EXCERPT = [
+    "IRSCAN - read-only Windows endpoint triage",
+    "host      LUXTVTZ",
+    "time      2026-09-17 00:41:12",
+    "tool      0.1.0",
+    "",
+    "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+    "HIGH 1   MED 4   INFO 83   - something was found that needs attention",
+    "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550",
+    "",
+    "[HIGH] A service was installed and logged by the Service Control Manager",
+    "       service:  RemoteAccessAgent",
+    "       file:     C:\\ProgramData\\rma\\agent.exe",
+    "       time:     2026-09-16 03:12:44",
+    "       why:      the name matches a known remote-access tool",
+    "",
+    "  This is what the file on disk will contain, byte for byte."
+  ].join("\n");
+
   function demoCall(cmd, args) {
     if (cmd === "app_info") return Promise.resolve(DEMO_APP_INFO);
     if (cmd === "export_report") {
       return Promise.resolve((args && args.path) || "C:\\Users\\x\\report.txt");
     }
+    // The real shell returns the rendered report; the stand-in has none, so it
+    // says so in the same shape a missing command would. A silent empty string
+    // would make the report view look finished when nothing had been read.
+    if (cmd === "report_text") {
+      return Promise.resolve(DEMO_REPORT_EXCERPT);
+    }
     if (cmd === "disable_service" || cmd === "remove_autostart") {
       return demoRemediate(cmd, args);
     }
     if (cmd === "scan") {
-      demoRunProgress();
+      // Resolved only once the stand-in has emitted, so the promise the UI
+      // waits on settles in the same order the shell settles it: after the
+      // last progress event. A browser run that finished before its own first
+      // event would make the working step unreachable outside the shell.
+      var emitted = demoRunProgress();
       var payload = {};
       var k;
       for (k in DEMO_PAYLOAD) {
         if (Object.prototype.hasOwnProperty.call(DEMO_PAYLOAD, k)) payload[k] = DEMO_PAYLOAD[k];
       }
       payload.delta = demoDeltaState();
-      return Promise.resolve(payload);
+      if (!emitted) return Promise.resolve(payload);
+      // A failed emit must not strand the run: the report is what matters, and
+      // the stand-in is for looking at the interface.
+      return emitted.then(function () { return payload; }, function () { return payload; });
     }
     return Promise.reject(new Error(t("err.noCommand", { cmd: cmd })));
   }
@@ -939,20 +1153,25 @@
 
   function demoRunProgress() {
     var handler = progressHandler;
-    if (!handler) return;
+    if (!handler) return null;
     var added = [0, 1, 4, 3, 6, 0, 2, 1, 5, 12, 1, 9, 205, 0];
-    DEMO_COLLECTORS.forEach(function (c, i) {
-      window.setTimeout(function () {
-        handler({
-          collector: c,
-          elapsedMs: 120 + i * 730,
-          findingsAdded: added[i],
-          error: c === "events"
-            ? "журнал безопасности недоступен: EvtQuery завершился с ошибкой Win32 5 (отказано в доступе)"
-            : null
-        });
-      }, 90 + i * 90);
-    });
+    var step = function (i) {
+      if (i >= DEMO_COLLECTORS.length) return Promise.resolve();
+      return new Promise(function (done) {
+        window.setTimeout(function () {
+          handler({
+            collector: DEMO_COLLECTORS[i],
+            elapsedMs: 120 + i * 730,
+            findingsAdded: added[i],
+            error: DEMO_COLLECTORS[i] === "events"
+              ? "журнал безопасности недоступен: EvtQuery завершился с ошибкой Win32 5 (отказано в доступе)"
+              : null
+          });
+          done();
+        }, 90);
+      }).then(function () { return step(i + 1); });
+    };
+    return step(0);
   }
 
   /* ============================================================ 3. helpers ==
@@ -1176,7 +1395,6 @@
     dom.progressSummary = $("progress-summary");
     dom.progressList = $("progress-list");
     dom.filters = document.querySelectorAll(".filter");
-    dom.filterCounts = { all: $("f-all"), high: $("f-high"), med: $("f-med"), info: $("f-info") };
     dom.search = $("search");
     dom.groupList = $("group-list");
     dom.detailScroll = $("detail-scroll");
@@ -1206,6 +1424,10 @@
 
     // Containment.
     dom.detailActions = $("detail-actions");
+
+    // Wizard. Last, because it needs nothing the report's own lookup provides,
+    // and because a missing wrapper must not stop the report from being cached.
+    cacheWizardDom();
   }
 
   /* ============================================================ 5. renderers == */
@@ -1251,17 +1473,14 @@
     var v = state.payload && state.payload.verdict;
     var has = !!v;
     var groups = state.payload ? asArray(state.payload.groups) : [];
-    var sums = tally(groups);
 
     // The three big numbers are the backend's verdict. Before a scan there is
-    // nothing to count, and an em dash is honest about that.
+    // nothing to count, and an em dash is honest about that. They are also the
+    // only place a severity count appears: the filter buttons below the band
+    // carry labels, not the same three numbers a second time.
     ["high", "med", "info"].forEach(function (s) {
       var n = has ? v[s] : null;
       dom.counts[s].textContent = typeof n === "number" ? String(n) : "\u2014";
-    });
-
-    ["all", "high", "med", "info"].forEach(function (s) {
-      dom.filterCounts[s].textContent = has ? String(sums[s]) : "\u2014";
     });
 
     dom.headline.textContent = has
@@ -1449,8 +1668,14 @@
   function renderProgress() {
     var active = state.scanning || state.progress.length > 0;
     dom.progress.hidden = !active;
+    // The progress list and the "since last time" strip share one reserved box.
+    // While a run is in flight the collector rows are what that box is for; the
+    // strip returns when the run ends. Showing both at once would print half a
+    // comparison under half a collector list.
+    dom.delta.hidden = active;
     if (!active) {
       clear(dom.progressList);
+      renderWizardProgress();
       return;
     }
 
@@ -1479,6 +1704,10 @@
       dom.progressList.appendChild(li);
     });
     dom.progressList.scrollTop = dom.progressList.scrollHeight;
+
+    // The wizard's scan step counts the same list: one source for the count,
+    // so the two cannot disagree about how many collectors have reported.
+    renderWizardProgress();
   }
 
   /** Groups surviving the severity filter and the search box, in payload order. */
@@ -2058,6 +2287,9 @@
     dom.saveTxtBtn.disabled = on || !has;
     dom.saveJsonBtn.disabled = on || !has;
     dom.saveTxtBtn.setAttribute("aria-busy", on ? "true" : "false");
+    // The wizard's two buttons export the same report and are busy with it too.
+    Wiz.saving = on;
+    renderWizard();
   }
 
   /**
@@ -2083,7 +2315,9 @@
     Backend.save(opts).then(function (chosen) {
       if (chosen) return chosen;
       if (Backend.hasDialog()) return null;   // cancelled in a real dialog
-      return askPathFallback(opts.defaultPath, format);
+      return wizardPicking()
+        ? wzPickPath(opts.defaultPath, format)
+        : askPathFallback(opts.defaultPath, format);
     }).then(function (path) {
       if (!path) return null;                 // cancelled: say nothing
       state.reportPath = path;
@@ -2096,9 +2330,16 @@
         var where = written == null ? path : String(written);
         showSaveConfirmation(where);
         setSaving(false);
+        // Same answer, in the place the button that asked for it lives. A run
+        // of attempts belongs next to its buttons, not in a header that has
+        // already emptied itself back to the host name.
+        wizardShowSaved(t(format === "json"
+          ? "wz.result.savedJson" : "wz.result.saved", { path: where }), false);
       }, function (err) {
-        showSaveConfirmation(t("save.fail", { message: describeError(err) }), true);
+        var why = t("save.fail", { message: describeError(err) });
+        showSaveConfirmation(why, true);
         setSaving(false);
+        wizardShowSaved(why, true);
       });
     });
   }
@@ -2163,6 +2404,7 @@
     renderVerdict();
     renderDelta();
     renderProgress();
+    renderWizard();
     renderList();
     renderDetail();
     renderActions();
@@ -2295,6 +2537,9 @@
   function runScan() {
     if (state.scanning) return;
 
+    // The header's Scan button is still there and still means this. If the
+    // wizard is up, the run gets its own step over the report.
+    wizardOnScanStart();
     state.progress = [];
     state.selected = 0;
     setScanning(true);
@@ -2308,7 +2553,17 @@
       if (done) return;
       done = true;
       setScanning(false);
+      // A scan that failed is still a finished scan: the wizard leaves its
+      // working step either way, and the report says what happened.
+      wizardScanFinished();
       render();
+      // Only an automatic run carries the user forward. A scan someone asked
+      // for from the header after closing the overlay leaves them where they are
+      // - opening a screen nobody asked for is its own kind of rude.
+      if (dom.wizard && Wiz.open && Wiz.autoStarted) {
+        Wiz.autoStarted = false;
+        wizardOpen(2);
+      }
     };
 
     Backend.invoke("scan", { quick: false }).then(function (payload) {
@@ -2387,6 +2642,612 @@
     document.addEventListener("keydown", onGlobalKey);
   }
 
+  /* ============================================================ 6b. wizard ==
+   * The window's top-level flow: what this is, what it is doing, what came out
+   * of it. Three steps, one at a time, over the report that already exists
+   * underneath them.
+   *
+   * The wizard is a LENS, not a second renderer. It reads the same `state` the
+   * panes read, and the report screen is a summary plus a viewport onto the real
+   * findings list and detail pane - those keep their ids, their renderers and
+   * their keyboard behaviour, and nothing here restructures them.
+   *
+   * None of the three steps is a dead end and none of them is a gate: the header
+   * stays reachable, and the report is always one step away from the scan step.
+   * A progress screen nobody can leave is a worse screen than no wizard at all.
+   */
+
+  /* The panels, in step order. An array rather than a bitmask because it is
+     read in a loop that has to keep working when a panel is missing. */
+  var WZ_PANELS = ["wstep-welcome", "wstep-scan", "wstep-result"];
+  var WZ_MARK = ["wzWelcome", "wzScan", "wzResult"];
+
+  /**
+   * The wizard's own state, and the only thing the step machine consults.
+   *
+   * `shown`/`open` describe markup mode: with no wrapper both start true, so a
+   * host serving these files without one gets the report and nothing else.
+   *
+   * `autoStarted` makes the start button idempotent: a double click or a held
+   * Enter cannot begin two scans, because `runScan` refuses to run twice and the
+   * step would then be left waiting on the first one.
+   */
+  var Wiz = {
+    step: 0,
+    open: true,
+    launching: false,
+    result: null,
+    // The rendered report, fetched on demand and kept for the scan it belongs to.
+    // A new run must clear it, or the panel would show the previous scan's report
+    // beside the current scan's numbers - the one comparison that must never lie.
+    report: null,
+    saving: false,
+    autoStarted: false,
+    reached: [false, false, false],
+    timer: 0,
+    autoTimer: 0,
+    startedAt: 0,
+    doneAt: 0
+  };
+
+  /** How long the welcome step is shown before the run starts by itself.
+   *  Long enough to read three lines and stop it; short enough that nobody
+   *  sits in front of a screen waiting for something to happen. */
+  var WIZ_AUTO_START_MS = 2600;
+
+  /** What the background indicator is doing. Motion, never the only signal:
+   *  the same fact is a word in `wz.scan.collector`. */
+  var WZ_FRAME = ["\u25CB", "\u25D4", "\u25D1", "\u25D0"];
+
+  /** The dot indicator, as a node map so its text nodes are replaced in place
+   *  rather than rebuilt: a fresh element every 120ms would be a garbage churn
+   *  in the middle of a scan. */
+  function makePhrase() {
+    var dots = [];
+    // One dot per step, taken from the panel list rather than written as a
+    // number: a fourth dot for a three-step flow renders as an ornament with
+    // no meaning, and reads on screen as an inconsistent grey blob.
+    for (var i = 0; i < WZ_PANELS.length; i++) dots.push(el("span", "wz-dot"));
+    var box = el("span", "wz-phrase");
+    box.setAttribute("aria-hidden", "true");
+    dots.forEach(function (d) { box.appendChild(d); });
+    box.dots = dots;
+    return box;
+  }
+
+  function stepPhrase(node, step) {
+    // One dot per step, filled up to the current one. The same fact is written
+    // out in the label beside it, so the dots are never the only telling.
+    var dots = node && node.dots ? node.dots : [];
+    for (var i = 0; i < dots.length; i++) {
+      var on = i <= step;
+      dots[i].textContent = on ? "\u25CF" : "\u25CB";
+      dots[i].className = "wz-dot" + (on ? " is-on" : "");
+    }
+  }
+
+  /** Seconds in one place, because a running clock is a string that changes four
+   *  times a second and nobody needs a tenth of a second. */
+  function elapsedText(ms) {
+    var total = Math.max(0, Math.floor(ms / 1000));
+    var m = Math.floor(total / 60);
+    var s = total % 60;
+    return m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  /** True when this screen is the one a save was asked from: its own path
+   *  control is inside the step, where the button that asked for it is. */
+  function wizardPicking() {
+    return !!(Wiz.open && Wiz.step === 2 && dom.wzPick);
+  }
+
+  /** Total collectors, from the app info the shell already reports. Zero when
+   *  unknown, and the caller then says "N reported" rather than inventing a
+   *  denominator it does not have. */
+  function collectorTotal() {
+    var n = appInfo && appInfo.collectors;
+    return typeof n === "number" && n > 0 ? n : 0;
+  }
+
+  /**
+   * Enter a step. Idempotent, and the only writer of `Wiz.step`.
+   *
+   * The whole visible change is one class, so a step change is one layout pass
+   * for the overlay instead of one per panel. `wizard-cover` is what hides the
+   * report: `visibility` rather than `display`, because display:none collapses
+   * every box underneath it (the panes' reserved heights are measured from the
+   * bottom of the window) and the report would then be re-laid-out the moment
+   * it reappears.
+   */
+  function wzEnter(step, opts) {
+    var o = opts || {};
+    var s = Math.max(0, Math.min(WZ_PANELS.length - 1, step | 0));
+    Wiz.step = s;
+    Wiz.reached[s] = true;
+
+    var wrap = dom.wizard;
+    if (!wrap) return;
+    wrap.classList.toggle("wizard-cover", s !== 2);
+    var i;
+    for (i = 0; i < WZ_PANELS.length; i++) {
+      var panel = dom[WZ_MARK[i]];
+      if (!panel) continue;
+      var on = i === s;
+      panel.classList.toggle("is-on", on);
+      // Focus moves with the step, or a keyboard user is left tabbing through a
+      // panel they cannot see.
+      if (on) panel.removeAttribute("aria-hidden");
+      else panel.setAttribute("aria-hidden", "true");
+    }
+    stepPhrase(dom.wzDots, s);
+    // The rail's three labels carry the same fact as the dots, in words. Both
+    // are written here so the two tellings cannot disagree: a rail whose dots
+    // say step 2 while its brightest label still says step 1 is worse than no
+    // rail at all, because it is a screen contradicting itself.
+    for (i = 0; i < WZ_PANELS.length; i++) {
+      var lbl = dom.wzStepLabels && dom.wzStepLabels["wz.step" + (i + 1)];
+      if (lbl) lbl.classList.toggle("is-on", i === s);
+    }
+    renderWizard();
+
+    if (s === 0) wizardStopClock();
+    if (s === 1) {
+      if (dom.wzSkip) dom.wzSkip.focus();
+    }
+    if (s === 2 && o.focus !== false) {
+      wizardStopClock();
+      if (dom.wzBack) dom.wzBack.focus();
+    }
+  }
+
+  /** Leave the wizard for the report. The header and the list stay live; this
+   *  is a view change, not a navigation. */
+  function wizardClose() {
+    if (!Wiz.open) return;
+    Wiz.open = false;
+    if (dom.wizard) {
+      dom.wizard.classList.remove("is-open");
+      // `wizard-cover` is what dims the report, and it is a separate class from
+      // `is-open` because the report step keeps it OFF while the overlay is
+      // still open. Leaving it on here dimmed the whole window to 14% the moment
+      // the overlay closed, which made the report unreadable - the exact
+      // opposite of what this function is for.
+      dom.wizard.classList.remove("wizard-cover");
+    }
+    // A pending automatic run must not fire into a closed wizard.
+    if (Wiz.autoTimer) { window.clearTimeout(Wiz.autoTimer); Wiz.autoTimer = 0; }
+    wizardStopClock();
+    if (dom.search && dom.search.focus) dom.search.focus();
+  }
+
+  /** Bring the overlay back, on whatever step the state justifies. */
+  function wizardOpen(step) {
+    if (!dom.wizard) return;
+    Wiz.open = true;
+    dom.wizard.classList.add("is-open");
+    wzEnter(step === undefined ? Wiz.step : step);
+  }
+
+  /**
+   * The live clock and the animated indicator. One interval, started only while
+   * the scan step is on screen and the scan is running, and stopped on every
+   * exit path - a timer left behind would keep a finished screen repainting.
+   */
+  function wizardTick() {
+    var ms = (Wiz.doneAt || Date.now()) - Wiz.startedAt;
+    if (dom.wzElapsed) {
+      dom.wzElapsed.textContent = t("wz.scan.elapsed", { time: elapsedText(ms) });
+    }
+    var n = state.progress.length;
+    if (state.scanning && dom.wzCollector) {
+      // The collector identifier is the core's name for the collector: it stays
+      // Latin, exactly as it is in the progress list and in a log someone greps.
+      var last = n > 0 ? state.progress[n - 1].collector : null;
+      var word = last == null ? t("wz.scan.starting") : String(last);
+      clear(dom.wzCollector);
+      dom.wzCollector.appendChild(el("span", "wz-label", t("wz.scan.collector")));
+      var name = el("span", "wz-name", word);
+      if (last != null) name.title = t("collector." + String(last));
+      dom.wzCollector.appendChild(name);
+      // Announce the identifier, not the whole line: the count and the clock
+      // change constantly and a screen reader should not read them out again.
+      if (last != null && dom.wzLive && dom.wzLive.textContent !== String(last)) {
+        dom.wzLive.textContent = String(last);
+      }
+    }
+    if (dom.wzFrame) dom.wzFrame.textContent = WZ_FRAME[Math.floor(ms / 120) % WZ_FRAME.length];
+  }
+
+  function wizardStartClock() {
+    if (Wiz.timer) return;
+    if (!Wiz.startedAt) Wiz.startedAt = Date.now();
+    Wiz.timer = window.setInterval(wizardTick, 120);
+  }
+
+  function wizardStopClock() {
+    if (!Wiz.timer) return;
+    window.clearInterval(Wiz.timer);
+    Wiz.timer = 0;
+  }
+
+  /**
+   * Enter the scanning step and start the scan behind it.
+   *
+   * A hop, not a start: the step is on screen before the command is sent, so a
+   * slow scan is visible rather than a button that appears to have done nothing.
+   */
+  function wizardStart(byUser) {
+    if (Wiz.launching) return;
+    // A start cancels a pending automatic one. Without this, pressing the button
+    // leaves the timer armed and a second scan begins on an already-finished run.
+    if (Wiz.autoTimer) { window.clearTimeout(Wiz.autoTimer); Wiz.autoTimer = 0; }
+    Wiz.launching = true;
+    Wiz.autoStarted = byUser !== false;
+    Wiz.startedAt = Date.now();
+    Wiz.doneAt = 0;
+    // A new run invalidates the report held for the old one, and hides the panel
+    // if it was open, so nothing from the previous scan can be read as this one's.
+    Wiz.report = null;
+    if (dom.wzViewPanel) dom.wzViewPanel.hidden = true;
+    wzEnter(1);
+    wizardStartClock();
+    wizardTick();
+    runScan();
+  }
+
+  /** Called by runScan, from both of its endings. */
+  function wizardScanFinished() {
+    Wiz.launching = false;
+    Wiz.doneAt = Date.now();
+    wizardStopClock();
+    wizardTick();
+  }
+
+  /** The report screen's summary: counts, what they mean, and what to do next.
+   *  The counts are the backend's numbers; only the words around them are this
+   *  file's. */
+  function wizardRenderResult() {
+    var sum = dom.wzSummary;
+    if (!sum) return;
+    clear(sum);
+
+    var v = (state.payload && state.payload.verdict) || null;
+    var warnings = state.payload ? asArray(state.payload.warnings) : [];
+    var failed = 0;
+    state.progress.forEach(function (p) { if (p.error) failed++; });
+    var haveHigh = !!(v && v.high > 0);
+    var haveAny = !!(v && (v.high > 0 || v.med > 0 || v.info > 0));
+    var incomplete = !state.payload || failed > 0 || warnings.length > 0;
+
+    var headKey = haveAny ? "wz.result.headlineWarn"
+      : (incomplete ? "wz.result.headlineIncomplete" : "wz.result.headlineClean");
+    var head = el("p", haveHigh ? "wz-headline is-high" : "wz-headline", t(headKey));
+    sum.appendChild(head);
+
+    var nums = el("div", "wz-nums");
+    [["high", "wz.result.high", "wz.result.highNote"],
+     ["med", "wz.result.med", "wz.result.medNote"],
+     ["info", "wz.result.info", "wz.result.infoNote"]].forEach(function (row) {
+      var box = el("div", "wz-num");
+      box.setAttribute("data-sev", row[0]);
+      box.appendChild(el("span", "wz-num-glyph glyph", glyph(row[0])));
+      box.appendChild(el("span", "wz-num-count",
+        v && typeof v[row[0]] === "number" ? String(v[row[0]]) : "\u2014"));
+      box.appendChild(el("span", "wz-num-label", t(row[1])));
+      box.appendChild(el("span", "wz-num-note", t(row[2])));
+      nums.appendChild(box);
+    });
+    sum.appendChild(nums);
+
+    var next = el("div", "wz-next");
+    next.appendChild(el("h3", "wz-next-head", t("wz.result.next")));
+    var ol = el("ol", "wz-next-list");
+    // A failed run has no findings to read, so the first instruction becomes the
+    // one that matters then: the check did not complete, run it again.
+    var keys = haveAny ? ["wz.result.next1", "wz.result.next2", "wz.result.next3"]
+      : (incomplete ? ["wz.result.headlineIncomplete", "wz.result.next2"]
+        : ["wz.result.next1", "wz.result.next2", "wz.result.next3"]);
+    keys.forEach(function (k) {
+      ol.appendChild(el("li", k === keys[0] ? null : "is-quiet", t(k)));
+    });
+    next.appendChild(ol);
+    sum.appendChild(next);
+  }
+
+  /** The report screen. Cheap enough to call on every render. */
+  function renderWizard() {
+    if (!dom.wizard) return;
+    wizardRenderResult();
+    if (dom.wzSaveTxt) dom.wzSaveTxt.disabled = Wiz.saving || !state.payload;
+    if (dom.wzSaveJson) dom.wzSaveJson.disabled = Wiz.saving || !state.payload;
+    // Reading the report is not gated on saving, so it follows `hasScan`, not
+    // `Wiz.saving`: a person may well read it and decide not to save at all.
+    if (dom.wzViewBtn) dom.wzViewBtn.disabled = !state.payload;
+    // The skip button exists to leave a scan that is still running. Once the
+    // scan has ended it has nothing left to do, so it goes away rather than
+    // sitting there disabled: a greyed-out button with no enabled alternative
+    // reads as a screen that is stuck, and this one is not.
+    if (dom.wzSkip) dom.wzSkip.hidden = !state.scanning;
+    var box = dom.wzSavedWrap;
+    if (box) {
+      box.hidden = !Wiz.result;
+      if (Wiz.result) {
+        box.setAttribute("data-op", Wiz.result.bad ? "err" : "ok");
+        dom.wzSaved.textContent = Wiz.result.text;
+      }
+    }
+  }
+
+  /** The scanning step's counts. Called from renderProgress, so the wizard and
+   *  the strip below it can never disagree about how many have reported. */
+  function renderWizardProgress() {
+    if (!dom.wizard || !Wiz.open || Wiz.step !== 1) return;
+    var n = state.progress.length;
+    var total = collectorTotal();
+    var said = total
+      ? t("wz.scan.reported", { n: n, total: total })
+      : t("wz.scan.reportedUnknown", { n: n });
+    if (dom.wzReported) dom.wzReported.textContent = said;
+    // The count is also the accessible reading: there is no meter element to
+    // carry it, because the meter could not be made to fill (see .wz-barline).
+    if (dom.wzReported) dom.wzReported.setAttribute("aria-live", "polite");
+    if (dom.wzCollected) {
+      var findings = state.payload && state.payload.groups ? asArray(state.payload.groups).length : 0;
+      dom.wzCollected.textContent = t("wz.scan.findings", { n: findings });
+    }
+  }
+
+  /* ---------------------------------------------- the wizard's own saving -- */
+  /**
+   * `saveReport` is the report's only writer and keeps its behaviour, including
+   * the browser's path box - except for one thing: when this screen's buttons
+   * are the ones that asked, the choosing happens here, inside the step, instead
+   * of in a header that is covered while steps one and two are on screen.
+   *
+   * The outcome is also reported through the existing `showSaveConfirmation`,
+   * which is what the header buttons' answer is.
+   */
+  var wzPickHost = null;
+
+  function wzPickOk(path) {
+    if (!wzPickHost) return;
+    wzPickHost.hidden = true;
+    wzPickHost.input.value = path;
+  }
+
+  function wzPickCancel() {
+    if (!wzPickHost) return;
+    wzPickHost.hidden = true;
+  }
+
+  function wzPickPath(defaultPath, format) {
+    var host = dom.wzPick;
+    if (!host) return Promise.resolve(defaultPath);
+    if (!wzPickHost) {
+      // Selects, not a text field: this host has no dialog plugin, so the
+      // extension is the only part of the name the user is choosing.
+      wzPickHost = el("div", "wz-pick-nav");
+      var lab = el("label", "action-field wide save-path");
+      lab.appendChild(el("span", null, t("save.as")));
+      var input = el("input");
+      input.type = "text";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); wzPickOk(input.value.trim() || defaultPath); }
+        if (e.key === "Escape") { e.preventDefault(); wzPickCancel(); }
+      });
+      lab.appendChild(input);
+      wzPickHost.appendChild(lab);
+      wzPickHost.input = input;
+      var row = el("div", "wz-pick-row");
+      ["txt", "json"].forEach(function (f) {
+        var b = el("button", "btn-ghost", f === "json" ? "JSON" : "TXT");
+        b.type = "button";
+        b.addEventListener("click", function () {
+          wzPickOk(wzPickHost.input.value.trim() || defaultPath);
+          saveReport(f);
+        });
+        row.appendChild(b);
+      });
+      var cancel = el("button", "btn-ghost", t("wz.back"));
+      cancel.type = "button";
+      cancel.addEventListener("click", wzPickCancel);
+      row.appendChild(cancel);
+      wzPickHost.appendChild(row);
+      host.appendChild(wzPickHost);
+    }
+    wzPickHost.hidden = false;
+    wzPickHost.input.value = defaultPath;
+    window.setTimeout(function () { wzPickHost.input.focus(); wzPickHost.input.select(); }, 0);
+    return Promise.resolve(defaultPath);
+  }
+
+  /** Record where the file went, next to the buttons that asked for it.
+   *  `Wiz.result` starts null so a fresh attempt clears the previous answer
+   *  rather than leaving a path from a run that no longer applies. */
+  function wizardShowSaved(text, bad) {
+    Wiz.saving = false;
+    Wiz.result = { bad: !!bad, text: text };
+    renderWizard();
+  }
+
+  function wizardSave(format) {
+    if (Wiz.saving || !state.payload) return;
+    Wiz.saving = true;
+    Wiz.result = null;
+    renderWizard();
+    saveReport(format);
+  }
+
+  /**
+   * Show or hide the rendered report inside the step.
+   *
+   * The text is fetched the first time and then kept in `Wiz.report`, because it
+   * cannot change for a given scan - a second request would return the same
+   * bytes and a second render would cost the same work for no new information.
+   * `cursor` still goes with the request: the window must never show the report
+   * of a scan it is no longer displaying, and that check lives in Rust.
+   *
+   * A failure is shown where the report would have been rather than only in a
+   * toast: the person asked for the report, so the answer belongs under the
+   * control they used.
+   */
+  function wizardToggleView() {
+    if (!dom.wzViewPanel) return;
+    var open = dom.wzViewPanel.hidden;
+
+    if (!open) {
+      dom.wzViewPanel.hidden = true;
+      if (dom.wzViewBtn) dom.wzViewBtn.setAttribute("aria-expanded", "false");
+      return;
+    }
+
+    dom.wzViewPanel.hidden = false;
+    if (dom.wzViewBtn) dom.wzViewBtn.setAttribute("aria-expanded", "true");
+
+    // Bring the panel into view. It opens below the buttons, which on this layout
+    // lands past the bottom of the visible area, so without this the only feedback
+    // is the button's own state and the reader concludes nothing happened. The CSS
+    // file turns motion off under `prefers-reduced-motion`, and this scroll is
+    // instant rather than smooth, so nothing here needs to ask about the setting.
+    // The scrolling element is the step panel, not the window - the layout gives
+    // `.wz-panel` its own `overflow: auto`, and `.wz-inner` centres with `margin:
+    // auto 0`, so scrolling the document does nothing. The scroll has to happen
+    // after the browser has laid the newly unhidden panel out, otherwise the
+    // container still reports its old height and the scroll lands at zero.
+    var scroller = dom.wzViewPanel.closest(".wz-panel") || dom.wzViewPanel.parentElement;
+    if (scroller) {
+      var toBottom = function () { scroller.scrollTop = scroller.scrollHeight; };
+      window.requestAnimationFrame(toBottom);
+    }
+
+    if (Wiz.report != null) {
+      dom.wzView.textContent = Wiz.report;
+      return;
+    }
+
+    dom.wzView.textContent = t("wz.result.viewLoading");
+    Backend.invoke("report_text", {
+      json: false,
+      cursor: state.payload ? state.payload.cursor : null
+    }).then(function (body) {
+      Wiz.report = body == null ? "" : String(body);
+      dom.wzView.textContent = Wiz.report;
+    }, function (err) {
+      dom.wzView.textContent = t("wz.result.viewFail", { message: describeError(err) });
+    });
+  }
+
+  function cacheWizardDom() {
+    dom.wizard = $("wizard");
+    dom.wzWelcome = $("wstep-welcome");
+    dom.wzScan = $("wstep-scan");
+    dom.wzResult = $("wstep-result");
+    dom.wzSteps = $("step-dots");
+    dom.wzDots = makePhrase();
+    if (dom.wzSteps) dom.wzSteps.appendChild(dom.wzDots);
+    dom.wzStart = $("wz-start");
+    dom.wzReport = $("wz-report");
+    dom.wzSkip = $("wz-skip");
+    dom.wzFrame = $("wz-frame");
+    dom.wzCollector = $("wz-collector");
+    dom.wzLive = $("wz-live");
+    dom.wzReported = $("wz-reported");
+    dom.wzElapsed = $("wz-elapsed");
+    dom.wzCollected = $("wz-collected");
+    dom.wzSummary = $("wz-summary");
+    dom.wzSaveTxt = $("wz-save-txt");
+    dom.wzSaveJson = $("wz-save-json");
+    dom.wzView = $("wz-view");
+    dom.wzViewPanel = $("wz-view-panel");
+    dom.wzViewBtn = $("wz-view-btn");
+    dom.wzSaved = $("wz-saved");
+    dom.wzSavedWrap = $("wz-saved-wrap");
+    dom.wzPick = $("wz-pick");
+    dom.wzBack = $("wz-back");
+    dom.wzDone = $("wz-done");
+    dom.wzStepLabels = {
+      "wz.step1": $("wz-step1"),
+      "wz.step2": $("wz-step2"),
+      "wz.step3": $("wz-step3")
+    };
+  }
+
+  function wireWizard() {
+    if (!dom.wizard) return;
+    // One listener for the overlay: every control in it is static in the markup,
+    // so a handler per button would be five listeners saying the same thing.
+    dom.wizard.addEventListener("click", function (e) {
+      var id = e.target && e.target.id;
+      if (id === "wz-start") { e.preventDefault(); wizardStart(true); return; }
+      if (id === "wz-skip") { e.preventDefault(); wizardClose(); return; }
+      if (id === "wz-report") { e.preventDefault(); wizardOpen(2); return; }
+      if (id === "wz-save-txt") { e.preventDefault(); wizardSave("txt"); return; }
+      if (id === "wz-save-json") { e.preventDefault(); wizardSave("json"); return; }
+      if (id === "wz-view-btn" || id === "wz-view-close") {
+        e.preventDefault();
+        wizardToggleView();
+        return;
+      }
+      if (id === "wz-back") { e.preventDefault(); wizardOpen(0); return; }
+      if (id === "wz-done") { e.preventDefault(); wizardClose(); }
+    });
+  }
+
+  /**
+   * Boot for the wizard.
+   *
+   * `?wizard=0` starts with the overlay closed and no automatic scan: that is
+   * how someone who wants the report - not the tour - reaches it, and it is the
+   * only supported way to skip. The auto-start is the one scan this file
+   * launches unasked, and it is what the welcome screen literally offers.
+   */
+  function wizardInit() {
+    var q = "";
+    try { q = String(window.location.search || ""); } catch (e) { q = ""; }
+    var off = /[?&]wizard=0/.test(q);
+
+    if (!dom.wizard) {
+      // No wrapper in the markup (an older index.html, or a host serving these
+      // files without it). Say nothing and change nothing: the report is the
+      // product, and it must not depend on the tour.
+      Wiz.open = false;
+      return;
+    }
+
+    wzEnter(0, { focus: false });
+    if (off) { wizardClose(); return; }
+    wizardOpen(0);
+    // The welcome step is shown for a moment before the run starts, and this
+    // delay is load-bearing, not decoration. Starting the scan in the same task
+    // that shows step one meant the step change beat the first paint: the window
+    // opened straight onto "scanning", and the one screen that says what this
+    // tool is - and that it changes nothing - was never displayed. In a tool
+    // whose whole claim is "read-only, it changes nothing", that is the consent
+    // statement going missing.
+    //
+    // A person can cut it short two ways: press Start (which runs immediately),
+    // or press Enter on the already-focused button. After this window the run is
+    // automatic, because the button the step offers means exactly this.
+    Wiz.autoTimer = window.setTimeout(function () {
+      Wiz.autoTimer = 0;
+      wizardStart(false);
+    }, WIZ_AUTO_START_MS);
+  }
+
+  /** The header's own Scan button, and anything else that starts a run: the
+   *  scan step is what the window shows while one is in flight. */
+  function wizardOnScanStart() {
+    if (!dom.wizard || !Wiz.open) return;
+    Wiz.launching = true;
+    Wiz.autoStarted = true;
+    Wiz.startedAt = Date.now();
+    Wiz.doneAt = 0;
+    wzEnter(1);
+    wizardStartClock();
+  }
+
   /* =============================================================== 7. boot == */
 
   function boot() {
@@ -2395,25 +3256,37 @@
     applyI18n(document);
     cacheDom();
     wire();
+    wireWizard();
     // The button label is renderer-owned rather than markup-owned (it changes
     // while a scan runs), so it needs the same first pass every other string
     // gets from applyI18n.
     setScanning(false);
 
-    if (!Backend.isLive()) {
-      // Say so, once, in the place a reviewer will look: the warnings list.
-      var noted = false;
-      Backend.invoke("app_info").then(function (info) {
-        appInfo = info;
-        render();
-      });
-      void noted;
-    } else {
-      Backend.invoke("app_info").then(function (info) {
-        appInfo = info;
-        render();
-      }).catch(function () { render(); });
+    // The language comes back with app_info, and it is the whole reason this call
+    // happens before the first real paint: applyI18n() ran above in the fallback
+    // language, so if the shell disagrees the markup has to be filled again. Both
+    // branches below do that through adopt().
+    function adopt(info) {
+      appInfo = info;
+      var lang = info && info.language;
+      // Only re-run the markup pass when the answer actually differs; a browser whose
+      // fallback already matched must not be re-rendered for nothing.
+      if (lang === "ru" || lang === "en") {
+        if (lang !== LANG) {
+          setLanguage(lang);
+          applyI18n(document);
+          setScanning(state.scanning);
+          renderWizard();
+        }
+      }
+      render();
     }
+
+    Backend.invoke("app_info").then(adopt, function () {
+      // No shell answer: keep the navigator fallback already installed and show the
+      // window as it stands rather than leaving it empty.
+      render();
+    });
 
     Backend.listen("scan://progress", function (p) {
       if (!p) return;
@@ -2429,6 +3302,13 @@
     // Render the pre-scan state immediately: every pane is deliberate before any
     // data exists, and nothing moves when it arrives.
     render();
+
+    // Last, because it starts a scan: the report has to exist underneath the
+    // step that will uncover it, and `wizardInit` is what puts the window on
+    // its first step. It is also the only thing here that lands with the
+    // language already resolved, so the first screen a person reads is never a
+    // frame of the wrong one.
+    wizardInit();
   }
 
   if (document.readyState === "loading") {

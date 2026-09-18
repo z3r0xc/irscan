@@ -19,7 +19,7 @@
 //! (see `--yara-rules`) must not cost the user the whole scan.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use yara_x::{Compiler, MetaValue, Rules, Scanner};
@@ -136,20 +136,26 @@ fn load_rule_sources(extra: &[PathBuf], warnings: &mut Vec<String>) -> Vec<(Stri
             Ok(meta) if meta.len() <= MAX_RULE_BYTES => {}
             Ok(_) => {
                 warnings.push(format!(
-                    "yara: rule file {} is larger than the {} byte cap; skipped",
+                    "yara: файл правил {} больше предела в {} байт; пропущен",
                     path.display(),
                     MAX_RULE_BYTES
                 ));
                 continue;
             }
             Err(e) => {
-                warnings.push(format!("yara: cannot read {}: {e}", path.display()));
+                warnings.push(format!(
+                    "yara: не удалось прочитать {}: {e}",
+                    path.display()
+                ));
                 continue;
             }
         }
         match std::fs::read_to_string(path) {
             Ok(text) => sources.push((path.display().to_string(), text)),
-            Err(e) => warnings.push(format!("yara: cannot read {}: {e}", path.display())),
+            Err(e) => warnings.push(format!(
+                "yara: не удалось прочитать {}: {e}",
+                path.display()
+            )),
         }
     }
     sources
@@ -157,13 +163,21 @@ fn load_rule_sources(extra: &[PathBuf], warnings: &mut Vec<String>) -> Vec<(Stri
 
 /// Collect the files worth scanning from what the other collectors already found.
 ///
-/// The running executable is excluded. A scanner must not report itself: this binary
-/// contains the very strings the bundled rules look for (a rule that matches
+/// The tool's own artifacts are excluded. A scanner must not report itself: its
+/// binaries contain the very strings the bundled rules look for (a rule that matches
 /// `HiddenDesktop` matches the code that hunts for it), so a self-match would sit at
 /// the top of every report as a permanent false positive.
+///
+/// `current_exe()` alone is not enough. The engine ships as two binaries - the console
+/// `irscan.exe` and the windowed `irscan-desktop.exe` - and running either one scans
+/// the other, because only the *running* image was excluded. On the author's host that
+/// produced eight findings naming the tool's own build tree, including two HIGH ones
+/// (the tool reporting itself for containing a keylogger's API set, which is the
+/// string list it uses to find keyloggers). Every process and service image that
+/// belongs to this program is therefore excluded, console or windowed.
 fn targets(ctx: &ScanContext) -> Vec<PathBuf> {
     let mut set: BTreeSet<PathBuf> = BTreeSet::new();
-    let own_image = std::env::current_exe().ok();
+    let ours = own_images();
 
     for record in ctx.processes.values() {
         if let Some(path) = &record.path {
@@ -188,9 +202,63 @@ fn targets(ctx: &ScanContext) -> Vec<PathBuf> {
 
     set.into_iter()
         .filter(|p| is_scannable_path(&p.to_string_lossy()))
-        .filter(|p| own_image.as_deref() != Some(p.as_path()))
+        .filter(|p| !is_own_image_name(p) && !ours.contains(&normalized(p)))
         .take(MAX_FILES)
         .collect()
+}
+
+/// The file names this program's own binaries carry.
+///
+/// Both spellings are listed rather than only the running one, because the two can be
+/// installed side by side and either may be the one running the check.
+const OWN_IMAGE_NAMES: &[&str] = &["irscan.exe", "irscan-desktop.exe"];
+
+/// Canonical paths of every copy of this program that the scan could otherwise reach.
+///
+/// The running executable is resolved through the filesystem so a differently spelled
+/// path (`\?\D:\...`, a symlinked directory, a differing letter case) still matches
+/// the process table entry. The sibling binary is looked for next to it; a copy in
+/// another directory is caught by the file-name check below, which is coarse but
+/// cannot miss, and a coarse exclusion that only ever hides the scanner is safer than
+/// a precise one that occasionally reports it.
+fn own_images() -> BTreeSet<PathBuf> {
+    let mut out = BTreeSet::new();
+    if let Ok(exe) = std::env::current_exe() {
+        out.insert(normalized(&exe));
+        if let Some(dir) = exe.parent() {
+            for name in OWN_IMAGE_NAMES {
+                let sibling = dir.join(name);
+                if sibling.try_exists().unwrap_or(false) {
+                    out.insert(normalized(&sibling));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A path in the form two spellings of the same file can be compared in.
+///
+/// `canonicalize` resolves case, short names and links; when the file cannot be
+/// resolved (it is gone, or access is denied) the raw path is lowercased as a fallback,
+/// which is still correct on Windows because its paths are case-insensitive.
+fn normalized(path: &Path) -> PathBuf {
+    match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => PathBuf::from(path.to_string_lossy().to_lowercase()),
+    }
+}
+
+/// Is this file name one of the scanner's own binaries?
+fn is_own_image_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .map(|n| {
+            OWN_IMAGE_NAMES
+                .iter()
+                .any(|own| n.eq_ignore_ascii_case(own))
+        })
+        .unwrap_or(false)
 }
 
 /// Scan the collected targets with the shipped rules.
@@ -220,7 +288,11 @@ impl Collector for YaraCollector {
 
         let rule_count = rules.iter().count();
         if rule_count == 0 {
-            ctx.warn("yara: no rules compiled, content scanning was skipped entirely".to_string());
+            ctx.warn(
+                "yara: ни одного правила не скомпилировано, проверка содержимого \
+                 полностью пропущена"
+                    .to_string(),
+            );
             return Ok(());
         }
 
@@ -231,7 +303,7 @@ impl Collector for YaraCollector {
 
         let mut lines: Vec<String> = Vec::with_capacity(files.len() + 4);
         lines.push(format!(
-            "{rule_count} rule(s) compiled from {} source(s); {} candidate file(s)",
+            "скомпилировано правил: {rule_count} из {} источник(ов); файлов-кандидатов: {}",
             sources.len(),
             files.len()
         ));
@@ -264,35 +336,40 @@ impl Collector for YaraCollector {
                             meta.push((key.to_string(), stringify(&value)));
                         }
                         let severity = severity_from_meta(&meta);
-                        let description = meta_value(&meta, "description")
-                            .unwrap_or_else(|| "matched a bundled detection rule".to_string());
+                        let description = meta_value(&meta, "description").unwrap_or_else(|| {
+                            "правило обнаружения из встроенного набора".to_string()
+                        });
 
                         let mut finding = Finding::new(
                             severity,
                             "yara",
-                            format!("Content matched YARA rule '{}'", rule.identifier()),
+                            format!(
+                                "Содержимое файла совпало с правилом YARA '{}'",
+                                rule.identifier()
+                            ),
                         )
-                        .evidence(format!("file    : {} ({} bytes)", path.display(), size))
-                        .evidence(format!("rule    : {}", rule.identifier()))
-                        .evidence(format!("rule note: {description}"));
+                        .evidence(format!("файл    : {} ({} байт)", path.display(), size))
+                        .evidence(format!("правило : {}", rule.identifier()))
+                        .evidence(format!("описание правила: {description}"));
                         // The namespace groups rules by origin (bundled vs an
                         // externally supplied rule file), which is what a reader needs
                         // in order to judge how much to trust the match. yara-x also
                         // exposes tags through a wrapper type with no text accessor, so
                         // the namespace is the useful, documented field here.
                         finding = finding.evidence(format!(
-                            "origin  : {} namespace",
+                            "набор правил: {} (namespace)",
                             sanitize(rule.namespace(), 64)
                         ));
                         finding = finding
                             .evidence(
-                                "A YARA match is a lead, not a verdict. Corroborate it with the \
-                                 path, the signature and the network evidence in this report.",
+                                "Совпадение с правилом YARA — это зацепка, а не приговор. \
+                                 Подтвердите его путём к файлу, подписью и сетевыми данными из \
+                                 этого отчёта.",
                             )
                             .remediation(
-                                "Inspect the file: if it is not something you or your IT \
-                                 department installed, treat the machine as compromised and \
-                                 reinstall from clean media rather than deleting this one file.",
+                                "Проверьте файл: если вы или ваш ИТ-отдел его не устанавливали, \
+                                 считайте машину скомпрометированной и переустановите систему с \
+                                 чистого носителя, а не удаляйте один этот файл.",
                             );
                         ctx.add(finding);
 
@@ -303,20 +380,20 @@ impl Collector for YaraCollector {
                         );
                     }
                     if matched_any {
-                        lines.push(format!("MATCH {} :: {:?}", path.display(), rule_count));
+                        lines.push(format!("СОВПАДЕНИЕ {} :: {:?}", path.display(), rule_count));
                     }
                 }
                 Err(e) => {
                     scan_errors += 1;
-                    lines.push(format!("ERROR {} :: {e}", path.display()));
+                    lines.push(format!("ОШИБКА {} :: {e}", path.display()));
                 }
             }
         }
 
         lines.push(format!(
-            "scanned={scanned} skipped={skipped} errors={scan_errors}"
+            "просканировано={scanned} пропущено={skipped} ошибок={scan_errors}"
         ));
-        ctx.raw_section("YARA CONTENT SCAN", lines);
+        ctx.raw_section("ПРОВЕРКА СОДЕРЖИМОГО YARA", lines);
         Ok(())
     }
 }
@@ -411,6 +488,42 @@ mod tests {
         );
     }
 
+    /// The hidden-desktop rule must not fire on a stock Windows binary.
+    ///
+    /// Measured defect: the rule listed `CreateDesktopW` and `SwitchDesktop` among its
+    /// strings and required two of them. Those are ordinary `user32` imports - they sit
+    /// in the import table as plain text in every process that touches a window station -
+    /// so `C:\Windows\System32\winlogon.exe` supplied both and the scanner put a HIGH
+    /// "hidden desktop technique" finding on the core of Windows itself.
+    ///
+    /// The rule now matches only an explicit name for the technique, so a real Windows
+    /// image must produce no match. `winlogon.exe` is the specimen rather than a
+    /// synthetic buffer because the defect was only visible against the real file.
+    #[test]
+    fn the_hidden_desktop_rule_does_not_fire_on_a_windows_binary() {
+        let path = Path::new(r"C:\Windows\System32\winlogon.exe");
+        if !path.try_exists().unwrap_or(false) {
+            return; // not running on Windows, or a layout without winlogon
+        }
+        let data = std::fs::read(path).expect("read winlogon.exe");
+        let sources = vec![("bundled".to_string(), BUNDLED_RULES.to_string())];
+        let (rules, errors) = compile_sources(&sources);
+        assert_eq!(errors, Vec::<String>::new());
+
+        let mut scanner = Scanner::new(&rules);
+        let matched: Vec<String> = scanner
+            .scan(&data)
+            .expect("scan")
+            .matching_rules()
+            .map(|r| r.identifier().to_string())
+            .collect();
+
+        assert!(
+            !matched.iter().any(|r| r == "irscan_hidden_desktop_marker"),
+            "winlogon.exe must not match the hidden-desktop rule, matched: {matched:?}"
+        );
+    }
+
     #[test]
     fn a_broken_source_is_isolated_and_the_good_one_survives() {
         let sources = vec![
@@ -484,6 +597,37 @@ mod tests {
         assert!(
             !targets(&ctx).contains(&own),
             "the running executable must be excluded from the scan"
+        );
+    }
+
+    /// Both spellings of this program are excluded, not only the running one.
+    ///
+    /// Measured on the author's host: running the console `irscan.exe` scanned the
+    /// windowed `irscan-desktop.exe` sitting beside it, because only `current_exe()`
+    /// was excluded. The result was eight findings naming the tool's own build tree,
+    /// including two HIGH ones - the scanner reporting itself as containing a
+    /// keylogger's API set, which is the string list it uses to *find* keyloggers.
+    #[test]
+    fn neither_binary_of_this_program_is_scanned() {
+        assert!(is_own_image_name(Path::new(r"D:\build\irscan.exe")));
+        assert!(is_own_image_name(Path::new(r"D:\build\irscan-desktop.exe")));
+        assert!(is_own_image_name(Path::new(r"D:\build\IRSCAN-DESKTOP.EXE")));
+        // A different program whose name merely starts the same way is not ours.
+        assert!(!is_own_image_name(Path::new(r"D:\build\irscan-helper.exe")));
+        assert!(!is_own_image_name(Path::new(r"D:\build\not-irscan.exe")));
+    }
+
+    /// A copy that cannot be resolved to a canonical path is still matched by name,
+    /// which is what makes the exclusion hold for a build tree the scan can only see
+    /// through the process table.
+    #[test]
+    fn an_unresolvable_path_still_normalizes_to_something_comparable() {
+        let missing = Path::new(r"D:\does\not\exist\IRScan-Desktop.exe");
+        assert!(!normalized(missing).as_os_str().is_empty());
+        assert_eq!(
+            normalized(missing),
+            normalized(Path::new(r"d:\DOES\NOT\EXIST\irscan-desktop.exe")),
+            "case must not decide whether two spellings of one path compare equal"
         );
     }
 }

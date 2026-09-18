@@ -111,10 +111,10 @@ pub fn account_severity(account: &LocalAccount) -> Option<Severity> {
 /// Human label for a "days ago" figure. `None` is "never", never "0 days ago".
 pub fn days_to_label(days: Option<u32>) -> String {
     match days {
-        None => "never".to_string(),
-        Some(0) => "today".to_string(),
-        Some(1) => "1 day ago".to_string(),
-        Some(n) => format!("{n} days ago"),
+        None => "никогда".to_string(),
+        Some(0) => "сегодня".to_string(),
+        Some(1) => "1 день назад".to_string(),
+        Some(n) => format!("{n} дней назад"),
     }
 }
 
@@ -133,7 +133,8 @@ impl Collector for AccountsCollector {
             // built-in-account check can only match the English (and Russian) names,
             // so a localised install could hide an enabled Guest from this run.
             ctx.warn(
-                "accounts: USER_INFO_4 was unavailable, so account SIDs could not be read;                  built-in accounts are matched by name only",
+                "accounts: USER_INFO_4 недоступна, поэтому SID учётных записей прочитать не \
+                 удалось; встроенные учётные записи сопоставляются только по имени",
             );
         }
 
@@ -176,19 +177,22 @@ impl Collector for AccountsCollector {
 
             let mut reasons: Vec<String> = Vec::new();
             if is_enabled_builtin_guest(account) {
-                reasons.push("the account is enabled but ships disabled on Windows".to_string());
+                reasons.push(
+                    "учётная запись включена, хотя в Windows она поставляется отключённой"
+                        .to_string(),
+                );
             }
             if is_passwordless_and_enabled(account) {
-                reasons.push("a password is not required to use it".to_string());
+                reasons.push("для входа с ней пароль не требуется".to_string());
             }
             if should_flag_admin_without_description(account) {
-                reasons.push("it is an administrator with no description or full name".to_string());
+                reasons.push("это администратор без описания и полного имени".to_string());
             }
             if never_logged_on_admin(account) {
                 reasons.push(
-                    "it is an enabled administrator with no recorded logon (NetAPI updates this \
-                     field on network logons only, so an interactively-used account also \
-                     reads as never)"
+                    "это включённый администратор без зафиксированного входа (NetAPI обновляет \
+                     это поле только при входах по сети, поэтому учётная запись, которой \
+                     пользуются интерактивно, тоже выглядит как никогда не входившая)"
                         .to_string(),
                 );
             }
@@ -202,10 +206,10 @@ impl Collector for AccountsCollector {
             let mut finding = Finding::new(
                 severity,
                 "accounts",
-                format!("Local account: {}{}", account.name, detail),
+                format!("Локальная учётная запись: {}{}", account.name, detail),
             )
             .evidence(format!(
-                "enabled={} admin={} guest={} last logon={} password required={}",
+                "включена={} администратор={} гость={} последний вход={} пароль обязателен={}",
                 account.enabled,
                 account.is_admin,
                 account.is_guest,
@@ -213,14 +217,14 @@ impl Collector for AccountsCollector {
                 account.password_required,
             ))
             .evidence(format!(
-                "sid RID: {}",
+                "RID: {}",
                 match account.rid {
                     Some(rid) => rid.to_string(),
-                    None => "not read".to_string(),
+                    None => "не прочитан".to_string(),
                 }
             ))
             .evidence(format!(
-                "password age: {}",
+                "возраст пароля: {}",
                 days_to_label(account.password_age_days)
             ));
             for reason in &reasons {
@@ -229,14 +233,15 @@ impl Collector for AccountsCollector {
             ctx.add(
                 finding
                     .remediation(
-                        "Confirm this account with the machine's owner. If it was not created \
-                         deliberately, disable it, set a password, and check the Security event \
-                         log for logons (4624) and account changes (4720/4722/4732) around the \
-                         time it appeared.",
+                        "Подтвердите эту учётную запись у владельца машины. Если её не создавали \
+                         намеренно, отключите её, задайте пароль и проверьте журнал Security на \
+                         входы (4624) и изменения учётных записей (4720/4722/4732) вокруг \
+                         времени её появления.",
                     )
                     .remediation(
-                        "An account that can be used without a password is an open door: set \
-                         UF_PASSWD_REQUIRED (net user <name> /passwordreq:yes) or delete it.",
+                        "Учётная запись, которой можно пользоваться без пароля, — открытая \
+                         дверь: задайте UF_PASSWD_REQUIRED (net user <name> /passwordreq:yes) \
+                         или удалите её.",
                     ),
             );
         }
@@ -390,9 +395,9 @@ mod tests {
 
     #[test]
     fn days_to_label_never_and_pluralisation() {
-        assert_eq!(days_to_label(None), "never");
-        assert_eq!(days_to_label(Some(0)), "today");
-        assert_eq!(days_to_label(Some(1)), "1 day ago");
-        assert_eq!(days_to_label(Some(45)), "45 days ago");
+        assert_eq!(days_to_label(None), "никогда");
+        assert_eq!(days_to_label(Some(0)), "сегодня");
+        assert_eq!(days_to_label(Some(1)), "1 день назад");
+        assert_eq!(days_to_label(Some(45)), "45 дней назад");
     }
 }

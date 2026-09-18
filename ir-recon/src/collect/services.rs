@@ -61,9 +61,9 @@ pub fn is_system_service_account(account: &str) -> bool {
 /// out once here rather than at each format site.
 pub fn location_label(location: Location) -> &'static str {
     match location {
-        Location::Privileged => "a privileged location",
-        Location::AppData => "an application data directory",
-        Location::Drop => "a transit directory",
+        Location::Privileged => "привилегированный каталог",
+        Location::AppData => "каталог данных приложений",
+        Location::Drop => "каталог для временных файлов",
     }
 }
 
@@ -249,7 +249,7 @@ pub fn describe(r: &ServiceRecord) -> String {
         "{}  [{}]  state={} start={} account={} driver={} image={}",
         r.name,
         if r.display_name.is_empty() {
-            "<none>"
+            "<нет>"
         } else {
             r.display_name.as_str()
         },
@@ -258,7 +258,7 @@ pub fn describe(r: &ServiceRecord) -> String {
         account_label(&r.account),
         if r.is_driver { "yes" } else { "no" },
         if r.image_path.is_empty() {
-            "<none reported>"
+            "<не указан>"
         } else {
             r.image_path.as_str()
         },
@@ -273,31 +273,31 @@ pub fn describe(r: &ServiceRecord) -> String {
 pub fn evidence_lines(r: &ServiceRecord) -> Vec<String> {
     vec![
         format!(
-            "service: {} ({})",
+            "служба: {} ({})",
             r.name,
             if r.display_name.is_empty() {
-                "<none>"
+                "<нет>"
             } else {
                 r.display_name.as_str()
             }
         ),
-        format!("state: {}", r.state),
-        format!("start mode: {}", r.start_mode),
-        format!("account: {}", account_label(&r.account)),
+        format!("состояние: {}", r.state),
+        format!("запуск: {}", r.start_mode),
+        format!("учётная запись: {}", account_label(&r.account)),
         format!(
-            "image path: {}",
+            "путь к файлу: {}",
             if r.image_path.is_empty() {
-                "<none reported>"
+                "<не указан>"
             } else {
                 r.image_path.as_str()
             }
         ),
         format!(
-            "type: {}",
+            "тип: {}",
             if r.is_driver {
-                "kernel driver"
+                "драйвер ядра"
             } else {
-                "win32 service"
+                "служба win32"
             }
         ),
     ]
@@ -307,7 +307,7 @@ pub fn evidence_lines(r: &ServiceRecord) -> Vec<String> {
 /// it means `LocalSystem`, and printing an empty field would read like a gap.
 pub fn account_label(account: &str) -> &str {
     if account.is_empty() {
-        "LocalSystem (default)"
+        "LocalSystem (по умолчанию)"
     } else {
         account
     }
@@ -419,33 +419,36 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
     if let Some(sev) = service_severity(trusted, location, r.is_driver) {
         let title = if r.is_driver && location != Location::Privileged {
             format!(
-                "Kernel driver {name_disp} loads from {} ({})",
+                "Драйвер ядра {name_disp} загружается из {} ({})",
                 location_label(location),
                 r.image_path
             )
         } else if r.is_driver {
             format!(
-                "Kernel driver {name_disp} is not validly signed ({})",
+                "Драйвер ядра {name_disp} не имеет действительной подписи ({})",
                 r.image_path
             )
         } else if location == Location::Drop && trusted == Some(false) {
             format!(
-                "Service {name_disp} runs unsigned from a transit directory ({})",
+                "Служба {name_disp} работает без подписи из {} ({})",
+                location_label(location),
                 r.image_path
             )
         } else if location == Location::Drop {
             format!(
-                "Service {name_disp} runs from a transit directory ({})",
+                "Служба {name_disp} работает из {} ({})",
+                location_label(location),
                 r.image_path
             )
         } else if location == Location::AppData && trusted == Some(false) {
             format!(
-                "Service {name_disp} runs unsigned from an application data directory ({})",
+                "Служба {name_disp} работает без подписи из {} ({})",
+                location_label(location),
                 r.image_path
             )
         } else {
             format!(
-                "Service {name_disp} is not validly signed ({})",
+                "Служба {name_disp} не имеет действительной подписи ({})",
                 r.image_path
             )
         };
@@ -456,20 +459,20 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
         }
         if location != Location::Privileged {
             finding = finding.evidence(format!(
-                "location: {} (a standard user, and anything running as that user, can replace \
-                 this binary without elevation)",
+                "расположение: {} (обычный пользователь и любой процесс от его имени могут \
+                 подменить этот файл без прав администратора)",
                 location_label(location)
             ));
         }
         ctx.add(
             finding
                 .remediation(
-                    "Hash the image (SHA-256) and record the path and service name before any change.",
+                    "Снимите SHA-256 файла и запишите путь и имя службы до любых изменений.",
                 )
                 .remediation(
-                    "A service binary a standard user can replace is by itself a path to SYSTEM; \
-                     if this is not a program you installed, remove the service and rebuild the \
-                     host from external media.",
+                    "Файл службы, который может подменить обычный пользователь, сам по себе \
+                     открывает путь к правам SYSTEM; если это не установленная вами программа, \
+                     удалите службу и переустановите систему с внешнего носителя.",
                 ),
         );
     }
@@ -482,29 +485,26 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
             Finding::new(
                 Severity::High,
                 "service",
-                format!("Service {name_disp} points at a file that does not exist: {missing}"),
+                format!("Служба {name_disp} указывает на несуществующий файл: {missing}"),
             )
             .evidence(format!(
-                "the service is still registered with the Service Control Manager but \
-                 {missing} is absent"
+                "служба всё ещё зарегистрирована в Service Control Manager, но файла \
+                 {missing} на диске нет"
             ))
-            .evidence(format!("registered image path: {}", r.image_path))
-            .evidence(format!(
-                "start mode: {}, state: {}",
-                r.start_mode, r.state
-            ))
-            .evidence(format!("account: {}", account_label(&r.account)))
+            .evidence(format!("указанный путь к файлу: {}", r.image_path))
+            .evidence(format!("запуск: {}, состояние: {}", r.start_mode, r.state))
+            .evidence(format!("учётная запись: {}", account_label(&r.account)))
             .evidence(
-                "a surviving definition with a missing payload is more often deliberate cleanup \
-                 of evidence than harmless leftover",
+                "сохранившаяся запись службы без файла чаще говорит о намеренной зачистке \
+                 следов, чем о безобидном остатке от удаления",
             )
             .remediation(
-                "Check the System event log for event 7045 entries naming this service to find out \
-                 what created it, and look in prefetch for the payload's execution trace.",
+                "Посмотрите в журнале System события 7045 с именем этой службы, чтобы понять, \
+                 что её создало, и поищите в prefetch следы запуска файла.",
             )
             .remediation(
-                "Delete the service key only after the report is preserved; record the service \
-                 name and its original image path in the incident notes.",
+                "Удаляйте ветку реестра службы только после того, как отчёт сохранён; \
+                 зафиксируйте имя службы и исходный путь в заметках об инциденте.",
             ),
         );
     }
@@ -519,20 +519,23 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
             Finding::new(
                 Severity::High,
                 "service",
-                format!("Service {name_disp} runs as SYSTEM from a transit directory"),
+                format!(
+                    "Служба {name_disp} работает от SYSTEM из {}",
+                    location_label(location)
+                ),
             )
-            .evidence(format!("account: {}", account_label(&r.account)))
-            .evidence(format!("image path: {}", r.image_path))
-            .evidence(format!("location: {}", location_label(location)))
-            .evidence(format!("state: {}, start mode: {}", r.state, r.start_mode))
+            .evidence(format!("учётная запись: {}", account_label(&r.account)))
+            .evidence(format!("путь к файлу: {}", r.image_path))
+            .evidence(format!("расположение: {}", location_label(location)))
+            .evidence(format!("состояние: {}, запуск: {}", r.state, r.start_mode))
             .evidence(
-                "a service running as SYSTEM from a path a standard user can write to, in a \
-                 location nothing installs into, has no legitimate explanation",
+                "служба от SYSTEM, запущенная из каталога, куда может писать обычный \
+                 пользователь и куда ничего не устанавливается, не имеет законного объяснения",
             )
             .remediation(
-                "Stop and disable the service only after capturing the image and its hash; \
-                 anything running as SYSTEM from a writable directory should be assumed to have \
-                 had full control of this machine.",
+                "Останавливайте и отключайте службу только после того, как файл сохранён и \
+                 посчитан его хеш; если что-то работает от SYSTEM из доступного на запись \
+                 каталога, считайте, что оно полностью контролировало эту машину.",
             ),
         );
     }
@@ -547,21 +550,21 @@ fn classify(ctx: &mut ScanContext, r: &ServiceRecord, system_root: &str) {
                     Severity::High,
                     "service",
                     format!(
-                        "Service {name_disp} runs a system-process name from outside the Windows \
-                         directory"
+                        "Служба {name_disp} запускает процесс с именем системного компонента \
+                         из каталога вне Windows"
                     ),
                 )
-                .evidence(format!("image path: {exe}"))
+                .evidence(format!("путь к файлу: {exe}"))
                 .evidence(format!(
-                    "expected location: {}\\System32\\{}",
+                    "ожидаемое расположение: {}\\System32\\{}",
                     system_root.trim_end_matches('\\'),
                     basename(exe)
                 ))
-                .evidence(format!("service name: {name_disp}"))
+                .evidence(format!("имя службы: {name_disp}"))
                 .evidence(format!("account: {}", account_label(&r.account)))
                 .remediation(
-                    "A Windows component name outside %SystemRoot% is not legitimate; capture the \
-                     file and treat the host as compromised.",
+                    "Имя компонента Windows вне %SystemRoot% не бывает законным: сохраните \
+                     файл и считайте машину скомпрометированной.",
                 ),
             );
         }
@@ -829,10 +832,13 @@ mod tests {
             ),
             Some(Severity::High)
         );
-        assert_eq!(location_label(Location::Drop), "a transit directory");
+        assert_eq!(
+            location_label(Location::Drop),
+            "каталог для временных файлов"
+        );
         assert_eq!(
             location_label(Location::AppData),
-            "an application data directory"
+            "каталог данных приложений"
         );
     }
 
@@ -865,19 +871,21 @@ mod tests {
         let line = describe(&rec("AcmeAgent", "", "", false));
         assert!(line.contains("AcmeAgent"), "name always present: {line}");
         assert!(
-            line.contains("LocalSystem (default)"),
+            line.contains("LocalSystem (по умолчанию)"),
             "absent account is named: {line}"
         );
         assert!(
-            line.contains("<none reported>"),
+            line.contains("<не указан>"),
             "absent image path is named: {line}"
         );
         let ev = evidence_lines(&rec("AcmeAgent", r"C:\x\agent.exe", "", true));
-        assert!(ev.iter().any(|l| l.starts_with("state: ")));
-        assert!(ev.iter().any(|l| l.starts_with("start mode: ")));
-        assert!(ev.iter().any(|l| l == "account: LocalSystem (default)"));
-        assert!(ev.iter().any(|l| l == r"image path: C:\x\agent.exe"));
-        assert!(ev.iter().any(|l| l == "type: kernel driver"));
+        assert!(ev.iter().any(|l| l.starts_with("состояние: ")));
+        assert!(ev.iter().any(|l| l.starts_with("запуск: ")));
+        assert!(ev
+            .iter()
+            .any(|l| l == "учётная запись: LocalSystem (по умолчанию)"));
+        assert!(ev.iter().any(|l| l == r"путь к файлу: C:\x\agent.exe"));
+        assert!(ev.iter().any(|l| l == "тип: драйвер ядра"));
     }
 
     #[test]

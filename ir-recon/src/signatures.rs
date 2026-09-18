@@ -55,13 +55,13 @@ impl SigKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            SigKind::ProcessName => "process name",
-            SigKind::Path => "path",
-            SigKind::ServiceName => "service name",
-            SigKind::RegistryPath => "registry key",
-            SigKind::TaskName => "task name",
-            SigKind::Domain => "domain",
-            SigKind::Publisher => "publisher",
+            SigKind::ProcessName => "имя процесса",
+            SigKind::Path => "путь",
+            SigKind::ServiceName => "имя службы",
+            SigKind::RegistryPath => "ветка реестра",
+            SigKind::TaskName => "имя задачи",
+            SigKind::Domain => "домен",
+            SigKind::Publisher => "издатель",
         }
     }
 }
@@ -137,7 +137,7 @@ pub fn match_against(sigs: &[Signature], haystack: &[Haystack]) -> Vec<Finding> 
             // cannot tell a precise match ("agent.exe") from a loose one ("setup.exe"),
             // and a finding nobody can audit is a finding nobody should trust.
             let line = format!(
-                "{} '{}' matched {} needle '{}' ({})",
+                "{} «{}» совпадает с {} по образцу «{}» ({})",
                 hay.kind.label(),
                 hay.value,
                 sig.kind.label(),
@@ -158,14 +158,16 @@ pub fn match_against(sigs: &[Signature], haystack: &[Haystack]) -> Vec<Finding> 
                 Severity::Info
             };
             let title = if category.is_empty() {
-                format!("Known monitoring / remote-control product detected: {tool}")
+                format!("Обнаружен известный продукт мониторинга или удалённого управления: {tool}")
             } else {
-                format!("Monitoring / remote-control product detected: {tool} [{category}]")
+                format!(
+                    "Обнаружен продукт мониторинга или удалённого управления: {tool} [{category}]"
+                )
             };
             let mut f = Finding::new(severity, "signature", title).remediation(format!(
-                "Identify this product before deleting anything: if an employer or an IT \
-                 department installed it, removal is a policy matter, not a technical one. \
-                 Upstream reference: magicsword-io/LOLRMM entry '{tool}'."
+                "Определите, что это за продукт, прежде чем что-либо удалять: если его \
+                 установил работодатель или ИТ-отдел, удаление — вопрос политики, а не \
+                 техники. Источник записи: magicsword-io/LOLRMM, «{tool}»."
             ));
             for e in evidence {
                 f = f.evidence(e);

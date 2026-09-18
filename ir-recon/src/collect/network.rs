@@ -28,6 +28,7 @@
 
 use std::collections::HashSet;
 
+use crate::collect::services::location_label;
 use crate::collect::{CollectError, Collector};
 use crate::model::{ConnectionRecord, Finding, HaystackKind, ScanContext, Severity};
 use crate::rules::{classify_location, connection_severity, is_private_ip, port_label, Location};
@@ -164,12 +165,12 @@ pub fn describe(r: &ConnectionRecord) -> String {
 fn owner_lines(ctx: &ScanContext, pid: u32) -> (String, String) {
     let Some(p) = ctx.processes.get(&pid) else {
         return (
-            "<process has exited>".to_string(),
-            "<unavailable: the owning process is gone>".to_string(),
+            "<процесс завершился>".to_string(),
+            "<недоступно: процесс-владелец уже завершился>".to_string(),
         );
     };
     let name = if p.name.is_empty() {
-        "<unnamed>".to_string()
+        "<без имени>".to_string()
     } else {
         p.name.clone()
     };
@@ -180,7 +181,7 @@ fn owner_lines(ctx: &ScanContext, pid: u32) -> (String, String) {
         _ => String::new(),
     };
     let path = if path.is_empty() {
-        "<none reported>".to_string()
+        "<не указан>".to_string()
     } else {
         path
     };
@@ -225,11 +226,13 @@ impl Collector for NetworkCollector {
         rows.extend(udp_endpoints());
 
         if rows.is_empty() {
-            ctx.warn("network enumeration returned no endpoints (is the TCP/IP stack up?)");
+            ctx.warn(
+                "перечисление сетевых точек не вернуло ни одной записи (стек TCP/IP работает?)",
+            );
         }
         if rows.len() > MAX_CLASSIFIED {
             ctx.warn(format!(
-                "network: {} endpoints found; only the first {} were examined",
+                "сеть: найдено {} точек, проверены только первые {}",
                 rows.len(),
                 MAX_CLASSIFIED
             ));
@@ -290,7 +293,7 @@ fn classify(ctx: &mut ScanContext, r: &ConnectionRecord, listener_seen: &mut Has
     let public = is_public_remote(&r.remote);
     if let Some(sev) = connection_severity_for(location, owner_known, public) {
         let state_label = if r.state.trim().is_empty() {
-            "connection".to_string()
+            "соединение".to_string()
         } else {
             state.clone()
         };
@@ -299,37 +302,38 @@ fn classify(ctx: &mut ScanContext, r: &ConnectionRecord, listener_seen: &mut Has
         // would read like a lookup failure rather than the finding it is.
         let reason = match (location, owner_known) {
             (Location::Drop, _) => format!(
-                "the owning binary runs from a transit directory ({path}), which is where a \
-                 dropped payload lives - nothing legitimate installs there"
+                "исполняемый файл владельца запущен из {} ({path}), а именно там живёт \
+                 сброшенная полезная нагрузка - ничего законного туда не устанавливается",
+                location_label(location)
             ),
-            (_, false) => "no process in the table owns this socket: it outlived whatever \
-                           opened it, so nothing about the peer was ever verified"
+            (_, false) => "ни один процесс в таблице не владеет этим сокетом: он пережил того, \
+                           кто его открыл, поэтому удалённая сторона никогда не была проверена"
                 .to_string(),
-            _ => format!("the owning binary runs from {path}"),
+            _ => format!("исполняемый файл владельца запущен из {path}"),
         };
         ctx.add(
             Finding::new(
                 sev,
                 "network",
                 format!(
-                    "{state_label} to {} held by {} (pid {})",
+                    "{state_label} с {} у процесса {} (pid {})",
                     r.remote, name, r.pid
                 ),
             )
-            .evidence(format!("protocol: {}", r.protocol))
-            .evidence(format!("local endpoint: {}", r.local))
-            .evidence(format!("remote endpoint: {}", r.remote))
-            .evidence(format!("state: {}", r.state))
-            .evidence(format!("owning process: {name} (pid {})", r.pid))
-            .evidence(format!("image path: {path}"))
+            .evidence(format!("протокол: {}", r.protocol))
+            .evidence(format!("локальная точка: {}", r.local))
+            .evidence(format!("удалённая точка: {}", r.remote))
+            .evidence(format!("состояние: {}", r.state))
+            .evidence(format!("процесс-владелец: {name} (pid {})", r.pid))
+            .evidence(format!("путь к файлу: {path}"))
             .evidence(reason)
             .remediation(
-                "Identify the remote address and port before closing anything; a live upload \
-                 session is the strongest evidence this scan can produce.",
+                "Определите удалённый адрес и порт, прежде чем что-либо закрывать: живая \
+                 сессия выгрузки - самое сильное доказательство, которое даёт эта проверка.",
             )
             .remediation(
-                "Disconnect the machine from the network to stop the session, then work from the \
-                 report - the socket is gone once the process exits.",
+                "Отключите машину от сети, чтобы оборвать сессию, и дальше работайте по \
+                 отчёту - после завершения процесса сокет исчезнет.",
             ),
         );
     }
@@ -354,21 +358,19 @@ fn classify(ctx: &mut ScanContext, r: &ConnectionRecord, listener_seen: &mut Has
                 Finding::new(
                     Severity::Med,
                     "network",
-                    format!(
-                        "{label} is listening on port {listen_port} (pid {}, {name})",
-                        r.pid
-                    ),
+                    format!("{label} слушает порт {listen_port} (pid {}, {name})", r.pid),
                 )
-                .evidence(format!("local endpoint: {}", r.local))
-                .evidence(format!("protocol: {}", r.protocol))
-                .evidence(format!("owning process: {name} (pid {})", r.pid))
-                .evidence(format!("image path: {path}"))
+                .evidence(format!("локальная точка: {}", r.local))
+                .evidence(format!("протокол: {}", r.protocol))
+                .evidence(format!("процесс-владелец: {name} (pid {})", r.pid))
+                .evidence(format!("путь к файлу: {path}"))
                 .evidence(format!(
-                    "port {listen_port} is labelled {label} by the port table this scan uses"
+                    "порт {listen_port} помечен как {label} в таблице портов, которую использует \
+                     эта проверка"
                 ))
                 .remediation(
-                    "If you did not install this product, close the port and remove the software: \
-                     an open remote-control port is an inbound path into this machine.",
+                    "Если вы не устанавливали этот продукт, закройте порт и удалите программу: \
+                     открытый порт удалённого управления - это вход в машину извне.",
                 ),
             );
         }
@@ -644,9 +646,9 @@ mod tests {
         // A pid absent from the table means the process exited; that is evidence, so it
         // must be labelled rather than rendered as an empty field.
         let (name, path) = owner_lines(&ctx, 999);
-        assert_eq!(name, "<process has exited>");
+        assert_eq!(name, "<процесс завершился>");
         assert!(
-            path.contains("gone"),
+            path.contains("завершился"),
             "explains why the path is missing: {path}"
         );
     }

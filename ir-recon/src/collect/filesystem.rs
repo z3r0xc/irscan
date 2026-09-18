@@ -136,7 +136,7 @@ impl FilesystemCollector {
         }
         if hits.len() >= MAX_RESULTS {
             ctx.warn(format!(
-                "filesystem: list truncated at {} recent executables",
+                "filesystem: список усечён на {} последних исполняемых файлов",
                 MAX_RESULTS
             ));
         }
@@ -227,8 +227,8 @@ impl FilesystemCollector {
         // how the transit-directory rule came to depend on walk order in the first place.
         if signature_checks >= MAX_SIGNATURE_CHECKS {
             ctx.warn(format!(
-                "filesystem: signature verification stopped at {MAX_SIGNATURE_CHECKS} files; \
-                 executables listed after that point have no signature verdict"
+                "filesystem: проверка подписей остановлена на {MAX_SIGNATURE_CHECKS} файлах; \
+                 у исполняемых файлов ниже по списку подпись не проверена"
             ));
         }
 
@@ -247,7 +247,7 @@ impl FilesystemCollector {
         let dir = PathBuf::from(crate::win::expand(r"%SystemRoot%\Prefetch"));
         let Ok(entries) = std::fs::read_dir(&dir) else {
             ctx.warn(format!(
-                "filesystem: prefetch directory unavailable: {}",
+                "filesystem: каталог Prefetch недоступен: {}",
                 dir.display()
             ));
             return;
@@ -361,12 +361,12 @@ impl Reason {
     /// The human-readable clause shared by every file carrying this reason.
     pub fn describe(self) -> &'static str {
         match self {
-            Reason::Impersonation => "impersonates a Windows component",
+            Reason::Impersonation => "выдаёт себя за компонент Windows",
             Reason::UntrustedInDropLocation => {
-                "is unsigned and runs from a directory nothing installs to"
+                "не подписан и запускается из каталога, куда ничего не устанавливают"
             }
             Reason::FreshUntrustedInAppData => {
-                "is unsigned and appeared in a software data directory within the last 7 days"
+                "не подписан и появился в каталоге данных приложений за последние 7 дней"
             }
         }
     }
@@ -480,37 +480,40 @@ fn aggregate_findings(
 
         let title = if count == 1 {
             format!(
-                "Executable in {dir} {}: {}",
+                "Исполняемый файл в каталоге {dir} {}: {}",
                 reason.describe(),
                 crate::text::basename(&items[0].path)
             )
         } else {
-            format!("{count} executables in {dir} {}", reason.describe())
+            format!(
+                "В каталоге {dir} {count} исполняемых файлов, которые {}",
+                reason.describe()
+            )
         };
 
         let mut finding = Finding::new(severity, "filesystem", title)
-            .evidence(format!("directory: {dir}"))
-            .evidence(format!("matching files: {count}"))
+            .evidence(format!("каталог: {dir}"))
+            .evidence(format!("файлов найдено: {count}"))
             .evidence(format!(
-                "most recent: {} day(s) ago",
+                "самый свежий: {} дн. назад",
                 items.iter().map(|i| i.age_days).min().unwrap_or(0)
             ))
             .remediation(
-                "Identify the file(s) before acting: this tool reports a location and a date, \
-                 not a verdict on the program.",
+                "Прежде чем что-либо предпринимать, идентифицируйте файл (файлы): этот инструмент \
+                 сообщает расположение и дату, а не вердикт о программе.",
             );
 
         for item in items.iter().take(MAX_EXAMPLES) {
-            finding = finding.evidence(format!("example: {}", item.path));
+            finding = finding.evidence(format!("пример: {}", item.path));
         }
         if count > MAX_EXAMPLES {
             finding = finding.evidence(format!(
-                "and {} more file(s) in this directory",
+                "и ещё {} файл (файлов) в этом каталоге",
                 count - MAX_EXAMPLES
             ));
         }
         if let Some(trusted) = items.first().and_then(|i| i.trust) {
-            finding = finding.evidence(format!("signature trusted: {trusted}"));
+            finding = finding.evidence(format!("подпись действительна: {trusted}"));
         }
 
         // Hash the first example that still needs one; a per-file hash for a group of
@@ -520,7 +523,7 @@ fn aggregate_findings(
                 *hashes += 1;
                 let line = match hash(&item.hash_path) {
                     Some(digest) => format!("sha256 ({}): {digest}", item.path),
-                    None => format!("sha256 ({}): could not be computed", item.path),
+                    None => format!("sha256 ({}): вычислить не удалось", item.path),
                 };
                 finding = finding.evidence(line);
             }
@@ -852,17 +855,21 @@ mod tests {
         );
         let f = &findings[0];
         assert_eq!(f.severity, Severity::High);
-        assert!(f.title.contains("7 executables"), "title was: {}", f.title);
+        assert!(
+            f.title.contains("7 исполняемых файлов"),
+            "title: {}",
+            f.title
+        );
         assert!(f.title.contains(temp), "title was: {}", f.title);
-        assert!(f.evidence.iter().any(|l| l == "matching files: 7"));
+        assert!(f.evidence.iter().any(|l| l == "файлов найдено: 7"));
         assert_eq!(
             f.evidence
                 .iter()
-                .filter(|l| l.starts_with("example: "))
+                .filter(|l| l.starts_with("пример: "))
                 .count(),
             MAX_EXAMPLES
         );
-        assert!(f.evidence.iter().any(|l| l.contains("2 more file(s)")));
+        assert!(f.evidence.iter().any(|l| l.contains("ещё 2 файл")));
         assert_eq!(hashes, 1, "a group is hashed once, not once per file");
     }
 
@@ -900,7 +907,7 @@ mod tests {
         // The `C:\tmp` drop-location group holds two files; the others are singletons.
         let group = findings
             .iter()
-            .find(|f| f.title.contains(r"C:\tmp") && f.title.contains("2 executables"));
+            .find(|f| f.title.contains(r"C:\tmp") && f.title.contains("2 исполняемых файлов"));
         assert!(
             group.is_some(),
             "titles: {:?}",
@@ -908,7 +915,7 @@ mod tests {
         );
         assert!(findings
             .iter()
-            .any(|f| f.title.contains("impersonates a Windows component")));
+            .any(|f| f.title.contains("выдаёт себя за компонент Windows")));
     }
 
     #[test]

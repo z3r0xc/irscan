@@ -81,17 +81,16 @@ rule irscan_hidden_desktop_marker
 {
     meta:
         author = "irscan contributors"
-        description = "Mentions a hidden desktop or hidden-VNC technique. These strings appear in remote-control tooling that deliberately hides its session from the person sitting at the machine."
+        description = "Names a hidden desktop or hidden-VNC technique explicitly. The names of the Win32 desktop functions are deliberately NOT matched here: CreateDesktopW and SwitchDesktop are imported by winlogon.exe, explorer.exe and every process that touches a window station, so matching them reports Windows itself. Four-letter abbreviations are not matched either: `hvnc` was found inside a base64 certificate blob in NVIDIA Web Helper, where four arbitrary letters are a coincidence rather than a technique. What is worth a lead is a binary that spells the technique out."
         severity = "high"
     strings:
         $h1 = "HiddenDesktop" ascii nocase
         $h2 = "Hidden Desktop" ascii nocase
-        $h3 = "hvnc" ascii nocase
-        $h4 = "hVNC" ascii
-        $h5 = "CreateDesktopW" ascii
-        $h6 = "SwitchDesktop" ascii
+        $h3 = "HiddenVNC" ascii nocase
+        $h4 = "hidden vnc" ascii nocase
+        $h5 = "HiddenVnc" ascii nocase
     condition:
-        uint16(0) == 0x5A4D and 2 of them
+        uint16(0) == 0x5A4D and 1 of them
 }
 
 rule irscan_remote_control_product_marker

@@ -21,9 +21,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sysinfo::{System, Users};
 
+use crate::collect::services::location_label;
 use crate::collect::{CollectError, Collector};
 use crate::model::{Finding, HaystackKind, ProcessRecord, ScanContext, Severity, MAX_STRING};
-use crate::rules::{classify_location, execution_severity, looks_masquerading};
+use crate::rules::{classify_location, execution_severity, looks_masquerading, Location};
 use crate::text::sanitize;
 use crate::win::sig::{company_name, is_signature_trusted};
 
@@ -58,9 +59,9 @@ const KERNEL_PSEUDO_PROCESSES: &[&str] = &[
 /// a human reading the report can tell "unsigned" from "signed by <vendor>".
 pub fn trust_label(trusted: Option<bool>) -> &'static str {
     match trusted {
-        Some(true) => "signed by a trusted publisher",
-        Some(false) => "unsigned or untrusted signature",
-        None => "signature not verified",
+        Some(true) => "подписан доверенным издателем",
+        Some(false) => "неподписанный или недоверенная подпись",
+        None => "подпись не проверена",
     }
 }
 
@@ -154,14 +155,10 @@ pub fn describe(p: &ProcessRecord) -> String {
 
 /// The evidence block attached to any process finding.
 ///
-/// `trusted` and `user_writable` are passed in rather than read from `p` so the
-/// caller can hand over the values it actually used in the rule decision, and so
-/// the function is testable without a Windows host.
-pub fn evidence_lines(
-    p: &ProcessRecord,
-    trusted: Option<bool>,
-    user_writable: bool,
-) -> Vec<String> {
+/// `trusted` and `location` are passed in rather than read from `p` so the caller
+/// can hand over the values it actually used in the rule decision, and so the
+/// function is testable without a Windows host.
+pub fn evidence_lines(p: &ProcessRecord, trusted: Option<bool>, location: Location) -> Vec<String> {
     let name = if p.name.is_empty() {
         "<none>"
     } else {
@@ -169,7 +166,7 @@ pub fn evidence_lines(
     };
     let path = match p.path.as_deref() {
         Some(v) if !v.as_os_str().is_empty() => v.to_string_lossy().into_owned(),
-        _ => "<none reported>".to_string(),
+        _ => "<не указан>".to_string(),
     };
     let owner = if p.owner.is_empty() {
         "<unknown>"
@@ -187,21 +184,17 @@ pub fn evidence_lines(
     };
     let company = p.company.as_deref().unwrap_or("<unknown>");
     vec![
-        format!("pid {} ({}) parent pid {}", p.pid, name, p.ppid),
-        format!("image path: {}", path),
-        format!("signature: {}", trust_label(trusted)),
-        format!("company: {}", company),
         format!(
-            "location: {}",
-            if user_writable {
-                "user-writable (a standard user can modify it without elevation)"
-            } else {
-                "not user-writable"
-            }
+            "идентификатор процесса: {} ({}) родительский процесс: {}",
+            p.pid, name, p.ppid
         ),
-        format!("owner: {}", owner),
-        format!("started (epoch seconds): {}", started),
-        format!("command line: {}", cmd),
+        format!("путь к файлу: {}", path),
+        format!("подпись: {}", trust_label(trusted)),
+        format!("издатель: {}", company),
+        format!("расположение: {}", location_label(location)),
+        format!("учётная запись: {}", owner),
+        format!("запущен (секунды эпохи): {}", started),
+        format!("командная строка: {}", cmd),
     ]
 }
 
@@ -229,12 +222,12 @@ impl Collector for ProcessesCollector {
         entries.sort_by_key(|p| p.pid().as_u32());
 
         if entries.is_empty() {
-            ctx.warn("process enumeration returned no processes");
+            ctx.warn("перечисление процессов не вернуло ни одного процесса");
             return Ok(());
         }
         if entries.len() > MAX_PROCESSES {
             ctx.warn(format!(
-                "process enumeration returned {} entries; only the first {} were examined",
+                "перечисление процессов вернуло {} записей; проверены только первые {}",
                 entries.len(),
                 MAX_PROCESSES
             ));
@@ -259,7 +252,7 @@ impl Collector for ProcessesCollector {
             let owner = match process.user_id() {
                 Some(uid) => {
                     let name = owner_name(&users, uid);
-                    if name == "<unresolved>" {
+                    if name == "<не определена>" {
                         owners_unresolved += 1;
                     }
                     name
@@ -323,7 +316,7 @@ impl Collector for ProcessesCollector {
 
         if owners_unresolved > 0 {
             ctx.warn(format!(
-                "could not resolve the owning account for {owners_unresolved} process(es)"
+                "не удалось определить учётную запись-владельца для {owners_unresolved} процесс(ов)"
             ));
         }
 
@@ -366,49 +359,58 @@ fn report_unreadable_paths(ctx: &mut ScanContext, unreadable: &[Unreadable], ele
     let shown = names.len().min(20);
     let mut name_list = names[..shown].join(", ");
     if names.len() > shown {
-        name_list.push_str(&format!(", and {} more", names.len() - shown));
+        name_list.push_str(&format!(", и ещё {}", names.len() - shown));
     }
 
     let (severity, title, note) = if elevated {
         (
             Severity::Med,
             format!(
-                "{count} process image path(s) could not be read even though the scan is elevated"
+                "Не читается путь к файлу у {count} процесс(ов), хотя проверка выполняется с \
+                 правами администратора"
             ),
-            "The scan holds an administrator token and still cannot open these images, so the \
-             access denial is the image's own, not the token's.",
+            "Проверка выполняется с правами администратора и всё равно не может открыть эти \
+             файлы, поэтому доступ запрещает сам файл, а не недостаток прав.",
         )
     } else {
         (
             Severity::Info,
-            format!("{count} process image path(s) could not be read (scan was not elevated)"),
-            "This is a privilege limit, not a hiding attempt: protected and SYSTEM processes \
-             refuse their image path to a non-elevated reader. Re-run elevated to resolve it.",
+            format!(
+                "Не читается путь к файлу у {count} процесс(ов) \
+                 (проверка без прав администратора)"
+            ),
+            "Это ограничение прав, а не попытка скрыться: защищённые процессы и процессы \
+             SYSTEM не отдают путь к файлу тому, кто читает их без прав администратора. \
+             Запустите проверку с правами администратора, чтобы это выяснить.",
         )
     };
 
     let mut finding = Finding::new(severity, "process", title)
-        .evidence(format!("affected processes: {count}"))
-        .evidence(format!("names: {name_list}"))
+        .evidence(format!("затронуто процессов: {count}"))
+        .evidence(format!("имена: {name_list}"))
         .evidence(format!(
-            "owner: {}",
+            "учётная запись: {}",
             if unreadable[0].owner.is_empty() {
-                "<unknown>"
+                "<неизвестно>"
             } else {
                 unreadable[0].owner.as_str()
             }
         ))
-        .evidence(format!("pid (first): {}", unreadable[0].pid))
-        .evidence(format!("scan elevated: {elevated}"))
-        .evidence(format!("note: {note}"))
+        .evidence(format!(
+            "идентификатор процесса (первый): {}",
+            unreadable[0].pid
+        ))
+        .evidence(format!("проверка с правами администратора: {elevated}"))
+        .evidence(format!("примечание: {note}"))
         .remediation(
-            "Re-run the scan elevated: most of these resolve to legitimate system images once \
-             the tool can read them.",
+            "Запустите проверку с правами администратора: большинство из них окажутся \
+             штатными системными файлами, как только у программы появится доступ к ним.",
         );
     if elevated {
         finding = finding.remediation(
-            "If the path stays hidden on an elevated scan, treat the image as suspect: a \
-             legitimate Windows binary does not deny its own path to an administrator.",
+            "Если путь остаётся скрытым и при проверке с правами администратора, считайте \
+             файл подозрительным: штатный двоичный файл Windows не скрывает собственный \
+             путь от администратора.",
         );
     }
     ctx.add(finding);
@@ -473,38 +475,38 @@ fn classify(
     if let Some(sev) = severity {
         let title = if escalated {
             format!(
-                "Process {} (pid {}) is unsigned and was created recently in a transit directory",
+                "Процесс {} (pid {}) не подписан и недавно создан в каталоге для временных файлов",
                 name_disp, p.pid
             )
         } else if system32_recent {
             format!(
-                "Process {} (pid {}) is an unsigned, recently created image inside System32",
+                "Процесс {} (pid {}) — неподписанный, недавно созданный образ внутри System32",
                 name_disp, p.pid
             )
         } else if user_writable && trusted == Some(false) {
             format!(
-                "Process {} (pid {}) is unsigned and runs from a per-user location",
+                "Процесс {} (pid {}) не подписан и запущен из каталога данных приложений",
                 name_disp, p.pid
             )
         } else if user_writable {
             format!(
-                "Process {} (pid {}) runs from a per-user location",
+                "Процесс {} (pid {}) запущен из каталога данных приложений",
                 name_disp, p.pid
             )
         } else {
             format!(
-                "Process {} (pid {}) is not validly signed",
+                "Процесс {} (pid {}) не имеет действительной подписи",
                 name_disp, p.pid
             )
         };
 
         let mut finding = Finding::new(sev, "process", title);
-        for line in evidence_lines(p, trusted, user_writable) {
+        for line in evidence_lines(p, trusted, location) {
             finding = finding.evidence(line);
         }
         if let Some(c) = created {
             finding = finding.evidence(format!(
-                "image file created at epoch {} ({} day(s) ago)",
+                "файл образа создан в момент эпохи {} ({} сут. назад)",
                 c,
                 now_secs().saturating_sub(c) / SECS_PER_DAY
             ));
@@ -512,10 +514,12 @@ fn classify(
         ctx.add(
             finding
                 .remediation(
-                    "Hash the image (SHA-256) and record the path; do not execute it to 'test' it.",
+                    "Снимите хеш файла (SHA-256) и запишите путь; не запускайте его, чтобы \
+                     'проверить'.",
                 )
                 .remediation(
-                    "If this is not software you installed, remove it and rebuild the host from external media.",
+                    "Если это не установленное вами программное обеспечение, удалите его и \
+                     переустановите систему с внешнего носителя.",
                 ),
         );
     }
@@ -529,29 +533,35 @@ fn classify(
                 Severity::High,
                 "process",
                 format!(
-                    "Process {} (pid {}) masquerades as a Windows system process",
+                    "Процесс {} (pid {}) выдаёт себя за системный процесс Windows",
                     name_disp, p.pid
                 ),
             )
             .evidence(format!(
-                "image path: {}",
-                if path.is_empty() { "<none reported>" } else { path }
+                "путь к файлу: {}",
+                if path.is_empty() {
+                    "<не указан>"
+                } else {
+                    path
+                }
             ))
-            .evidence(format!("signature: {}", trust_label(trusted)))
+            .evidence(format!("подпись: {}", trust_label(trusted)))
             .evidence(format!(
-                "company: {}",
-                p.company.as_deref().unwrap_or("<unknown>")
+                "издатель: {}",
+                p.company.as_deref().unwrap_or("<неизвестно>")
             ))
             .evidence(format!(
-                "expected location: {}\\System32\\{}",
+                "ожидаемое расположение: {}\\System32\\{}",
                 system_root.trim_end_matches('\\'),
                 p.name
             ))
             .remediation(
-                "A system process name outside %SystemRoot% is not legitimate; treat the image as hostile.",
+                "Имя системного процесса вне %SystemRoot% не бывает законным; считайте файл \
+                 враждебным.",
             )
             .remediation(
-                "Capture the image and its hash before removal, then rebuild the host from external media.",
+                "Сохраните сам файл и его хеш до удаления, затем переустановите систему с \
+                 внешнего носителя.",
             ),
         );
         return None;
@@ -593,7 +603,7 @@ fn owner_name(users: &Users, uid: &sysinfo::Uid) -> String {
     }
     // A failure to resolve an owner is a real gap in the evidence: say so rather
     // than emitting an empty field that reads like "no owner".
-    String::from("<unresolved>")
+    String::from("<не определена>")
 }
 
 /// Join an argv without lossy-allocating per argument more than once.
@@ -611,7 +621,7 @@ fn command_line(p: &sysinfo::Process) -> String {
 /// Display placeholder for an empty image name, used in finding titles.
 fn display_name(name: &str) -> &str {
     if name.is_empty() {
-        "<unnamed>"
+        "<без имени>"
     } else {
         name
     }
@@ -745,18 +755,20 @@ mod tests {
     fn evidence_lines_states_trust_in_words() {
         let p = rec(900, "tool.exe", Some(r"C:\Users\bob\tool.exe"));
 
-        let unsigned = evidence_lines(&p, Some(false), true);
-        assert!(unsigned.iter().any(|l| l.contains("untrusted signature")));
-        assert!(unsigned.iter().any(|l| l.contains("user-writable")));
+        let unsigned = evidence_lines(&p, Some(false), Location::AppData);
+        assert!(unsigned.iter().any(|l| l.contains("недоверенная подпись")));
+        assert!(unsigned
+            .iter()
+            .any(|l| l.contains("каталог данных приложений")));
 
-        let signed = evidence_lines(&p, Some(true), false);
+        let signed = evidence_lines(&p, Some(true), Location::Privileged);
         assert!(signed
             .iter()
-            .any(|l| l.contains("signed by a trusted publisher")));
-        assert!(!signed.iter().any(|l| l.contains("untrusted")));
+            .any(|l| l.contains("подписан доверенным издателем")));
+        assert!(!signed.iter().any(|l| l.contains("недоверенная")));
 
-        let unknown = evidence_lines(&p, None, false);
-        assert!(unknown.iter().any(|l| l.contains("not verified")));
+        let unknown = evidence_lines(&p, None, Location::Privileged);
+        assert!(unknown.iter().any(|l| l.contains("подпись не проверена")));
         assert!(unknown.iter().any(|l| l.contains("tool.exe")));
     }
 
@@ -858,15 +870,15 @@ mod tests {
         // Empty everything, including the pid-0 style row sysinfo reports.
         let blank = rec(0, "", None);
         assert!(describe(&blank).contains("pid=0"));
-        let lines = evidence_lines(&blank, None, false);
+        let lines = evidence_lines(&blank, None, Location::Privileged);
         assert!(!lines.is_empty());
-        assert!(lines.iter().any(|l| l.contains("<none reported>")));
+        assert!(lines.iter().any(|l| l.contains("<не указан>")));
 
         // An empty path string is treated as "reported nothing", and a system-binary
         // name with no path is the masquerade case rules::looks_masquerading owns.
         assert!(looks_masquerading("svchost.exe", "", r"C:\Windows"));
         assert!(!is_kernel_pseudo_process(""));
-        assert_eq!(trust_label(None), "signature not verified");
+        assert_eq!(trust_label(None), "подпись не проверена");
 
         // Paths that are pure noise must classify, not panic.
         assert!(!crate::rules::is_user_writable(""));
@@ -978,12 +990,12 @@ mod tests {
         let f = &ctx.findings[0];
         assert_eq!(f.severity, Severity::Info);
         assert!(f.title.contains('3'), "title was: {}", f.title);
-        assert!(f.evidence.iter().any(|l| l == "affected processes: 3"));
+        assert!(f.evidence.iter().any(|l| l == "затронуто процессов: 3"));
         // Distinct names in evidence, not a pid-per-line wall.
         let names = f
             .evidence
             .iter()
-            .find(|l| l.starts_with("names: "))
+            .find(|l| l.starts_with("имена: "))
             .cloned()
             .unwrap_or_default();
         assert!(names.contains("svchost.exe"), "names was: {names}");

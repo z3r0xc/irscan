@@ -164,7 +164,7 @@ fn query_class(ctx: &mut ScanContext, class: &str) -> Vec<WmiInstance> {
         Ok(instances) => instances,
         Err(message) => {
             ctx.warn(format!(
-                "WMI query {wql} in {NAMESPACE} failed: {message} - WMI persistence was NOT checked"
+                "Запрос WMI {wql} в {NAMESPACE} завершился ошибкой: {message} - механизмы автозапуска через WMI НЕ были проверены"
             ));
             Vec::new()
         }
@@ -179,14 +179,15 @@ fn report_filter(ctx: &mut ScanContext, instance: &WmiInstance) {
     let query = field(instance, "Query");
     let event_namespace = field(instance, "EventNamespace");
 
-    let title = format!("WMI event filter '{}'", display_name(&name));
+    let title = format!("Фильтр событий WMI '{}'", display_name(&name));
     let finding = Finding::new(class_severity("__EventFilter"), CATEGORY, title)
-        .evidence(format!("filter name: {}", display_name(&name)))
-        .evidence(format!("event namespace: {event_namespace}"))
-        .evidence(format!("WQL trigger: {query}"))
+        .evidence(format!("имя фильтра: {}", display_name(&name)))
+        .evidence(format!("пространство имён событий: {event_namespace}"))
+        .evidence(format!("WQL-запрос: {query}"))
         .remediation(
-            "Inspect this filter with Get-WmiObject -Namespace root\\subscription -Class __EventFilter; \
-             a filter with no legitimate software behind it should be removed.",
+            "Проверьте этот фильтр командой Get-WmiObject -Namespace root\\subscription \
+             -Class __EventFilter; фильтр, за которым не стоит известное вам программное \
+             обеспечение, следует удалить.",
         );
 
     ctx.add(finding);
@@ -203,25 +204,25 @@ fn report_command_consumer(ctx: &mut ScanContext, instance: &WmiInstance) {
     let template = field(instance, "CommandLineTemplate");
     let executable = field(instance, "ExecutablePath");
 
-    let title = format!("WMI command-line consumer '{}'", display_name(&name));
+    let title = format!("Потребитель WMI командной строки '{}'", display_name(&name));
     let mut finding = Finding::new(class_severity("CommandLineEventConsumer"), CATEGORY, title)
-        .evidence(format!("consumer name: {}", display_name(&name)))
+        .evidence(format!("имя потребителя: {}", display_name(&name)))
         .evidence(format!(
-            "command line: {}",
+            "командная строка: {}",
             truncate(&template, MAX_COMMAND_EVIDENCE)
         ));
 
     if let Some(text) = non_empty(&executable) {
         finding = finding.evidence(format!(
-            "executable: {}",
+            "исполняемый файл: {}",
             truncate(&text, MAX_COMMAND_EVIDENCE)
         ));
     }
 
     let finding = finding.remediation(
-        "This runs a command whenever its filter fires. Enumerate the binding \
-         (Get-WmiObject -Namespace root\\subscription -Class __FilterToConsumerBinding) and remove the \
-         consumer, the filter and the binding together.",
+        "Эта запись запускает команду каждый раз, когда срабатывает её фильтр. Перечислите \
+         привязки командой Get-WmiObject -Namespace root\\subscription \
+         -Class __FilterToConsumerBinding и удалите потребителя, фильтр и привязку вместе.",
     );
     ctx.add(finding);
 
@@ -254,28 +255,31 @@ fn report_script_consumer(ctx: &mut ScanContext, instance: &WmiInstance) {
     let text = field(instance, "ScriptText");
     let file_name = field(instance, "ScriptFileName");
 
-    let title = format!("WMI active-script consumer '{}'", display_name(&name));
+    let title = format!(
+        "Потребитель WMI с активным скриптом '{}'",
+        display_name(&name)
+    );
     let mut finding = Finding::new(class_severity("ActiveScriptEventConsumer"), CATEGORY, title)
-        .evidence(format!("consumer name: {}", display_name(&name)))
+        .evidence(format!("имя потребителя: {}", display_name(&name)))
         .evidence(format!(
-            "script engine: {}",
+            "движок скриптов: {}",
             truncate(&engine, MAX_COMMAND_EVIDENCE)
         ))
         .evidence(format!(
-            "script text: {}",
+            "текст скрипта: {}",
             truncate(&text, MAX_SCRIPT_EVIDENCE)
         ));
 
     if let Some(text) = non_empty(&file_name) {
         finding = finding.evidence(format!(
-            "script file: {}",
+            "файл скрипта: {}",
             truncate(&text, MAX_COMMAND_EVIDENCE)
         ));
     }
 
     let finding = finding.remediation(
-        "The script body above is stored in the WMI repository, not on disk. Remove the consumer, its \
-         filter and the binding together, then re-check the repository for further subscriptions.",
+        "Текст скрипта выше хранится в репозитории WMI, а не на диске. Удалите потребителя, \
+         его фильтр и привязку вместе, после чего проверьте репозиторий на другие подписки.",
     );
     ctx.add(finding);
 
@@ -304,15 +308,16 @@ fn report_binding(ctx: &mut ScanContext, instance: &WmiInstance) {
     let filter = field(instance, "Filter");
 
     let title = format!(
-        "WMI filter-to-consumer binding: {} -> {}",
+        "Привязка фильтра WMI к потребителю: {} -> {}",
         short_ref(&filter),
         short_ref(&consumer)
     );
     let finding = Finding::new(class_severity("__FilterToConsumerBinding"), CATEGORY, title)
-        .evidence(format!("filter: {filter}"))
-        .evidence(format!("consumer: {consumer}"))
+        .evidence(format!("фильтр: {filter}"))
+        .evidence(format!("потребитель: {consumer}"))
         .remediation(
-            "A binding is inert by itself; act on the consumer it names, then delete the binding.",
+            "Сама привязка ничего не выполняет; займитесь потребителем, которого она \
+             называет, и только потом удалите привязку.",
         );
     ctx.add(finding);
 
@@ -336,7 +341,7 @@ fn field(instance: &WmiInstance, name: &str) -> String {
 /// omitted it. A blank title would make two filters indistinguishable in the report.
 fn display_name(name: &str) -> String {
     if name.trim().is_empty() {
-        "(unnamed)".to_string()
+        "(без имени)".to_string()
     } else {
         name.to_string()
     }
@@ -355,7 +360,7 @@ fn short_ref(object_path: &str) -> String {
     let tail = after_colon.rsplit('.').next().unwrap_or(after_colon);
     let tail = tail.trim();
     if tail.is_empty() {
-        "(unnamed)".to_string()
+        "(без имени)".to_string()
     } else {
         tail.to_string()
     }
@@ -562,7 +567,7 @@ mod tests {
 
         assert_eq!(ctx.findings.len(), 4);
         for finding in &ctx.findings {
-            assert!(finding.title.contains("unnamed") || finding.title.contains("WMI"));
+            assert!(finding.title.contains("без имени") || finding.title.contains("WMI"));
         }
     }
 
@@ -600,7 +605,7 @@ mod tests {
         let line = ctx.findings[0]
             .evidence
             .iter()
-            .find(|e| e.starts_with("script text:"))
+            .find(|e| e.starts_with("текст скрипта:"))
             .cloned()
             .unwrap_or_default();
         assert!(
@@ -618,6 +623,6 @@ mod tests {
             short_ref("__EventFilter.Name=\"BootFilter\""),
             "Name=\"BootFilter\""
         );
-        assert_eq!(short_ref(""), "(unnamed)");
+        assert_eq!(short_ref(""), "(без имени)");
     }
 }

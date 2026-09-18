@@ -297,7 +297,7 @@ pub fn render_console(
     let _ = writeln!(
         out,
         "  {}",
-        style.dim("read-only endpoint triage for unauthorised monitoring or remote control")
+        style.dim("проверка только на чтение: скрытое наблюдение и удалённое управление")
     );
     let _ = writeln!(out, "{}", style.rule());
     out.push('\n');
@@ -319,21 +319,21 @@ pub fn render_console(
             .replace(&style.faint("·"), &style.faint("·").to_string())
             + &format!(" {}", host.user)
     };
-    kv("HOST", style.light(&who));
+    kv("ХОСТ", style.light(&who));
     kv(
-        "SYSTEM",
-        style.light(&format!("{}  build {}", host.os, host.build)),
+        "СИСТЕМА",
+        style.light(&format!("{}  сборка {}", host.os, host.build)),
     );
     let elevation = if host.elevated {
-        style.light("yes - full coverage")
+        style.light("да - проверено всё")
     } else {
-        style.bright("NO - some checks did not run; re-run as Administrator")
+        style.bright("НЕТ - часть проверок пропущена; запустите от администратора")
     };
-    kv("ELEVATED", elevation);
+    kv("ПРАВА", elevation);
     kv(
-        "COLLECTED",
+        "СОБРАНО",
         style.mid(&format!(
-            "{}  {}  booted {}",
+            "{}  {}  загрузка {}",
             host.collected_at,
             style.glyph('·', '-'),
             host.boot_time
@@ -342,13 +342,13 @@ pub fn render_console(
     out.push('\n');
 
     // ---- verdict --------------------------------------------------------
-    let _ = writeln!(out, "{}", style.heading("verdict"));
+    let _ = writeln!(out, "{}", style.heading("вывод"));
     out.push('\n');
     let counts = format!(
         "  {:<10}{:<10}{}",
-        style.accent(&format!("{} HIGH", verdict.high)),
-        style.bright(&format!("{} MED", verdict.med)),
-        style.mid(&format!("{} INFO", verdict.info)),
+        style.accent(&format!("{} крит.", verdict.high)),
+        style.bright(&format!("{} средн.", verdict.med)),
+        style.mid(&format!("{} инф.", verdict.info)),
     );
     let _ = writeln!(out, "{counts}");
     out.push('\n');
@@ -376,13 +376,13 @@ pub fn render_console(
 
     // ---- findings -------------------------------------------------------
     let groups = group_findings(ctx);
-    let _ = writeln!(out, "{}", style.heading("findings"));
+    let _ = writeln!(out, "{}", style.heading("находки"));
     out.push('\n');
     if groups.is_empty() {
         let _ = writeln!(
             out,
             "  {}",
-            style.dim("none - which is not the same as clean; see the note below")
+            style.dim("нет - и это не то же самое, что чисто; см. примечание ниже")
         );
         out.push('\n');
     }
@@ -392,7 +392,7 @@ pub fn render_console(
 
     // ---- warnings -------------------------------------------------------
     if !ctx.warnings.is_empty() {
-        let _ = writeln!(out, "{}", style.heading("warnings"));
+        let _ = writeln!(out, "{}", style.heading("внимание"));
         out.push('\n');
         let mut warnings: Vec<&String> = ctx.warnings.iter().collect();
         warnings.sort();
@@ -404,7 +404,7 @@ pub fn render_console(
         let _ = writeln!(
             out,
             "\n  {}",
-            style.dim("A warning means a check did not run. The report is incomplete.")
+            style.dim("Предупреждение означает, что проверка не выполнилась. Отчёт неполный.")
         );
         out.push('\n');
     }
@@ -414,13 +414,12 @@ pub fn render_console(
     let _ = writeln!(
         out,
         "  {}",
-        style.dim("A clean result is not proof of a clean machine: a kernel-mode rootkit or a")
+        style.dim("Чистый результат не доказывает, что машина чиста: rootkit в режиме ядра или")
     );
     let _ = writeln!(
         out,
         "  {}",
-        style
-            .dim("renamed agent with no registry trace can hide from every user-mode check above.")
+        style.dim("переименованный агент без следов в реестре не видны ни одной проверке выше.")
     );
     let _ = writeln!(out, "{}", style.rule());
 
@@ -433,7 +432,7 @@ fn render_group(style: &Style, g: &Grouped) -> String {
     let suffix = if g.instances > 1 {
         format!(
             "  {}",
-            style.dim(&format!("{} findings of this kind", g.instances))
+            style.dim(&format!("{} находок этого вида", g.instances))
         )
     } else {
         String::new()
@@ -619,15 +618,17 @@ mod tests {
 
         for needle in [
             "IRSCAN",
-            "HOST",
-            "VERDICT",
-            "FINDINGS",
-            "WARNINGS",
-            "clean machine",
+            "ХОСТ",
+            "ВЫВОД",
+            "НАХОДКИ",
+            "ВНИМАНИЕ",
+            "не доказывает, что машина чиста",
+            "Предупреждение означает",
         ] {
             assert!(view.contains(needle), "missing {needle}");
         }
         assert!(view.contains("[ HIGH ]"));
+        assert!(view.contains("1 крит."), "the counts row is Russian");
         // The file must never receive this; but if a user redirects, the escape codes
         // must not be able to exceed the declared width in a way that breaks a paste.
         let plain = strip_ansi(&view);
@@ -640,7 +641,6 @@ mod tests {
         let host = HostInfo::default();
         let verdict = crate::rules::verdict(&[], 0);
         let view = render_console(&Style::plain(), &host, &ctx, &verdict);
-        assert!(view.contains("none"));
-        assert!(view.contains("not the same as clean"));
+        assert!(view.contains("нет - и это не то же самое, что чисто"));
     }
 }
