@@ -357,8 +357,9 @@ pub fn render_text(host: &HostInfo, ctx: &ScanContext, verdict: &Verdict) -> Str
         kv_line(
             "Неполнота",
             &format!(
-                "{} проверок не выполнено - см. раздел ВНИМАНИЕ ниже",
-                ctx.warnings.len()
+                "{} {} не выполнено - см. раздел ВНИМАНИЕ ниже",
+                ctx.warnings.len(),
+                crate::text::plural_ru(ctx.warnings.len(), ("проверка", "проверки", "проверок"))
             )
         )
     );
@@ -403,8 +404,9 @@ pub fn render_text(host: &HostInfo, ctx: &ScanContext, verdict: &Verdict) -> Str
         // wrong" and "the report says this kind of thing is systemic here".
         let suffix = if g.instances > 1 {
             format!(
-                "   ({} находок этого вида; показано {} из них)",
+                "   ({} {} этого вида; показано {} из них)",
                 g.instances,
+                crate::text::plural_ru(g.instances, ("находка", "находки", "находок")),
                 g.evidence.len()
             )
         } else {
@@ -828,7 +830,10 @@ mod tests {
         }
         let verdict = crate::rules::verdict(&ctx.findings, 0);
         let text = render_text(&host(), &ctx, &verdict);
-        assert!(text.contains("(4 находок этого вида"));
+        assert!(
+            text.contains("(4 находки этого вида"),
+            "4 takes the paucal form: {text}"
+        );
 
         // The machine-readable report must stay complete: collapsing is a
         // presentation choice for humans, not a loss of data.

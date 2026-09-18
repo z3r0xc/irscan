@@ -200,7 +200,11 @@ fn disable_service(name: String, report_path: String) -> Result<Containment, Str
     // guarantee: if the record cannot be written, nothing has been modified yet, so
     // the error is a clean refusal rather than a machine changed with no way back.
     let action = act::prepare(&requested)?;
-    let undo = act::undo_path(&PathBuf::from(report_path.trim()));
+    let undo = act::undo_path(&PathBuf::from(report_path.trim())).ok_or_else(|| {
+        "save the report first: the undo record is written beside it, and without the \
+         report there is nowhere to put it. Nothing has been changed."
+            .to_string()
+    })?;
     act::write_undo_record(
         &undo,
         std::slice::from_ref(&action),
@@ -235,7 +239,11 @@ fn remove_autostart(
     };
 
     let action = act::prepare(&requested)?;
-    let undo = act::undo_path(&PathBuf::from(report_path.trim()));
+    let undo = act::undo_path(&PathBuf::from(report_path.trim())).ok_or_else(|| {
+        "save the report first: the undo record is written beside it, and without the \
+         report there is nowhere to put it. Nothing has been changed."
+            .to_string()
+    })?;
     act::write_undo_record(
         &undo,
         std::slice::from_ref(&action),

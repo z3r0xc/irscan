@@ -36,13 +36,34 @@ pub struct Applied {
 
 /// Where the undo record is written. Beside the report, so a removal and its reversal
 /// instructions travel together.
-pub fn undo_path(next_to: &Path) -> PathBuf {
+///
+/// Returns `None` when there is no report path. The record must sit next to the report -
+/// that is the whole point, so the two travel together - and with no report there is no
+/// "next to it" to compute. The previous behaviour produced `-undo.txt` and wrote it into
+/// whatever the process's working directory happened to be, which on this product is the
+/// folder the tool was run from **on the suspect machine**. A containment action would
+/// then create a file in an unpredictable place on a machine the operator does not
+/// control, which is the one thing this tool must never do.
+///
+/// The caller refuses the action instead. An action that cannot be recorded is an action
+/// that must not be taken.
+pub fn undo_path(next_to: &Path) -> Option<PathBuf> {
+    // Whitespace-only counts as empty: a path of spaces is not a place to write, and
+    // `Path::with_file_name` would turn it into a file named "-undo.txt" beside nothing.
+    //
+    // `file_stem` on an empty path yields an empty name, which is why this check is
+    // here and not left to `with_file_name`.
+    let raw = next_to.to_string_lossy();
+    if raw.trim().is_empty() {
+        return None;
+    }
+
     let mut name = next_to
         .file_stem()
         .map(|s| s.to_os_string())
         .unwrap_or_default();
     name.push("-undo.txt");
-    next_to.with_file_name(name)
+    Some(next_to.with_file_name(name))
 }
 
 /// Disable a service.
@@ -242,8 +263,20 @@ mod tests {
     #[test]
     fn the_undo_record_sits_beside_the_report() {
         let report = PathBuf::from(r"C:\Users\x\report.txt");
-        let undo = undo_path(&report);
-        assert_eq!(undo, PathBuf::from(r"C:\Users\x\report-undo.txt"));
+        assert_eq!(
+            undo_path(&report),
+            Some(PathBuf::from(r"C:\Users\x\report-undo.txt"))
+        );
+    }
+
+    /// No report path means no undo record, and the caller must refuse the action.
+    ///
+    /// This used to yield `-undo.txt` in the working directory, which on this product is
+    /// the folder the tool was launched from on the suspect machine.
+    #[test]
+    fn no_undo_record_is_written_without_a_report_path() {
+        assert_eq!(undo_path(Path::new("")), None);
+        assert_eq!(undo_path(Path::new("   ")), None);
     }
 
     #[test]

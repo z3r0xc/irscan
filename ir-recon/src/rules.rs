@@ -290,27 +290,57 @@ pub fn verdict(findings: &[Finding], warnings: usize) -> Verdict {
         }
     }
 
-    let headline = if high > 0 {
+    // The counts go through `plural_ru` so the report reads as Russian. Hardcoded
+    // "N находок" produced "1 находок" and "2 находок", and it is the first line of the
+    // report: a reader who sees the tool misuse their language has a reason to doubt the
+    // findings underneath, which is the opposite of what the report is for.
+    const FINDINGS: (&str, &str, &str) = ("находка", "находки", "находок");
+    const CHECKS: (&str, &str, &str) = ("проверка", "проверки", "проверок");
+
+    let found = if high > 0 {
         format!(
-            "{high} находок уровня \"критично\": это прямые признаки скрытого наблюдения \
-             или удалённого управления."
+            "{high} {} уровня \"критично\": это прямые признаки скрытого наблюдения \
+             или удалённого управления.",
+            crate::text::plural_ru(high, FINDINGS)
         )
     } else if med > 0 {
         format!(
-            "{med} находок требуют ручной проверки; по отдельности ни одна из них \
-             ничего не доказывает."
+            "{med} {} требуют ручной проверки; по отдельности ни одна из них \
+             ничего не доказывает.",
+            crate::text::plural_ru(med, FINDINGS)
         )
     } else {
+        String::new()
+    };
+
+    // A scan that could not run every check must not lead with "nothing suspicious was
+    // found", even when both statements are true. The operator - tired, reading the first
+    // line of a report on a machine they already suspect - quotes the clause they read
+    // first, and "ничего подозрительного" is a finding-shaped sentence about a machine
+    // the tool did not finish looking at. When checks were skipped, the incompleteness is
+    // the statement and the clean result is the caveat, not the other way round. It is
+    // also the placement the tool's own non-goal demands: it must never claim a machine is
+    // clean.
+    let mut headline = if found.is_empty() && warnings > 0 {
+        format!(
+            "Ни одна находка не подтвердилась, но проверка НЕ ЗАВЕРШЕНА: {warnings} {} не \
+             выполнилось, поэтому часть данных отсутствует и результат неполный. См. \
+             раздел ВНИМАНИЕ - это не значит, что здесь чисто.",
+            crate::text::plural_ru(warnings, CHECKS)
+        )
+    } else if found.is_empty() {
         "Ничего подозрительного этими проверками не найдено. Это НЕ доказывает, что машина \
          чиста: rootkit в режиме ядра или переименованный агент без следов в реестре не \
          видны ни одному из опрошенных интерфейсов пользовательского режима."
             .to_string()
+    } else {
+        found
     };
 
-    let mut headline = headline;
-    if warnings > 0 {
+    if warnings > 0 && !headline.starts_with("Ни одна находка") {
         headline.push_str(&format!(
-            " ({warnings} проверок не выполнилось - часть данных отсутствует, см. отчёт.)"
+            " ({warnings} {} не выполнилось - часть данных отсутствует, см. отчёт.)",
+            crate::text::plural_ru(warnings, CHECKS)
         ));
     }
 
@@ -594,6 +624,54 @@ mod tests {
     #[test]
     fn warnings_are_surfaced_in_the_headline() {
         let v = verdict(&[], 2);
-        assert!(v.headline.contains("2 проверок не выполнилось"));
+        // "2 проверок" was the old wording and wrong: 2 takes the paucal form.
+        assert!(
+            v.headline.contains("2 проверки не выполнилось"),
+            "headline must use the paucal form for 2: {}",
+            v.headline
+        );
+    }
+
+    /// A headline must not lead with a clean-sounding sentence when checks were skipped.
+    ///
+    /// Reachable whenever the operator declines the UAC prompt or passes `--no-elevate`:
+    /// the Security channel is unreadable, several collectors degrade, and the run has no
+    /// findings. The old headline opened with "Ничего подозрительного этими проверками не
+    /// найдено" and appended the incompleteness in brackets. The operator reads the first
+    /// clause and quotes it - and it is a finding-shaped sentence about a machine the tool
+    /// did not finish looking at, which is the claim this tool's own non-goal forbids.
+    #[test]
+    fn a_partial_scan_does_not_lead_with_a_clean_sounding_headline() {
+        for skipped in [1usize, 2, 5, 11, 21, 100] {
+            let v = verdict(&[], skipped);
+            assert!(
+                !v.headline.starts_with("Ничего подозрительного"),
+                "{skipped} skipped checks still led with the clean clause: {}",
+                v.headline
+            );
+            assert!(
+                v.headline.contains("НЕ ЗАВЕРШЕНА"),
+                "{skipped} skipped checks must say the check did not finish: {}",
+                v.headline
+            );
+        }
+    }
+
+    /// A complete scan with no findings still states its own limits, as before.
+    #[test]
+    fn a_complete_clean_scan_keeps_the_not_proven_sentence() {
+        let v = verdict(&[], 0);
+        assert!(v.headline.starts_with("Ничего подозрительного"));
+        assert!(v.headline.contains("НЕ доказывает"));
+    }
+
+    /// The count in the warning line takes the form the number requires.
+    #[test]
+    fn the_skipped_check_count_is_grammatical() {
+        assert!(verdict(&[], 1).headline.contains("1 проверка"));
+        assert!(verdict(&[], 3).headline.contains("3 проверки"));
+        assert!(verdict(&[], 5).headline.contains("5 проверок"));
+        assert!(verdict(&[], 11).headline.contains("11 проверок"));
+        assert!(verdict(&[], 21).headline.contains("21 проверка"));
     }
 }

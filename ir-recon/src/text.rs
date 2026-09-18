@@ -145,6 +145,33 @@ pub fn basename(path: &str) -> &str {
 }
 
 /// Strip surrounding quotes from a registry value that holds a command line.
+/// The Russian form of a noun for a count.
+///
+/// Russian selects between three forms, and the selection is not simply "one or many":
+///
+/// * **singular** for 1, 21, 31 and every number ending in 1 except 11;
+/// * **paucal** for 2-4, 22-24 and every number ending in 2, 3 or 4 except the teens;
+/// * **genitive plural** for everything else, *including 0 and 11-14*.
+///
+/// The teens are the case that reads as broken when missed: 11, 12, 13 and 14 end in the
+/// digits that would otherwise select the singular or paucal, and take the genitive
+/// plural instead.
+///
+/// `forms` is `(one, few, many)` - `("находка", "находки", "находок")`.
+pub fn plural_ru<'a>(count: usize, forms: (&'a str, &'a str, &'a str)) -> &'a str {
+    let (one, few, many) = forms;
+    let hundreds = count % 100;
+    // 11..=14 take the genitive plural whatever their last digit says.
+    if (11..=14).contains(&hundreds) {
+        return many;
+    }
+    match count % 10 {
+        1 => one,
+        2..=4 => few,
+        _ => many,
+    }
+}
+
 pub fn unquote(value: &str) -> &str {
     value.trim().trim_matches('"').trim()
 }
@@ -220,5 +247,68 @@ mod tests {
     fn empty_input_stays_empty() {
         assert_eq!(sanitize("", 64), "");
         assert_eq!(sanitize("\u{1b}[0m", 64), "");
+    }
+
+    /// Russian counts need three forms, not two.
+    ///
+    /// The report said "1 находок" and "3 проверок не выполнено". Both read as broken
+    /// Russian to the one person this tool is written for, and it is the first line of
+    /// the report - a reader who sees the tool misuse their language has a reason to
+    /// doubt its findings, which is the opposite of what the report is for.
+    ///
+    /// The rule is the standard one: 1, and any number ending in 1 except 11, take the
+    /// singular; 2-4 (except 12-14) take the paucal; everything else the genitive plural.
+    /// 11-14 are the exception that catches people out, so they are tested explicitly.
+    #[test]
+    fn russian_plural_picks_the_form_the_language_requires() {
+        let forms = ("находка", "находки", "находок");
+        let pick = |n| plural_ru(n, forms);
+
+        // Singular.
+        assert_eq!(pick(1), "находка");
+        assert_eq!(pick(21), "находка");
+        assert_eq!(pick(101), "находка");
+
+        // Paucal.
+        assert_eq!(pick(2), "находки");
+        assert_eq!(pick(3), "находки");
+        assert_eq!(pick(4), "находки");
+        assert_eq!(pick(22), "находки");
+        assert_eq!(pick(103), "находки");
+
+        // Genitive plural.
+        assert_eq!(pick(0), "находок");
+        assert_eq!(pick(5), "находок");
+        assert_eq!(pick(37), "находок");
+        assert_eq!(pick(100), "находок");
+
+        // The teens are the trap: they end in 1, 2, 3, 4 but take the genitive plural.
+        assert_eq!(pick(11), "находок");
+        assert_eq!(pick(12), "находок");
+        assert_eq!(pick(13), "находок");
+        assert_eq!(pick(14), "находок");
+        assert_eq!(pick(111), "находок");
+        assert_eq!(pick(112), "находок");
+    }
+
+    /// The same rule applied to a different noun, so the helper is not specialised to
+    /// one word by accident.
+    #[test]
+    fn russian_plural_works_for_any_noun() {
+        let forms = ("проверка", "проверки", "проверок");
+        assert_eq!(plural_ru(1, forms), "проверка");
+        assert_eq!(plural_ru(3, forms), "проверки");
+        assert_eq!(plural_ru(0, forms), "проверок");
+        assert_eq!(plural_ru(11, forms), "проверок");
+        assert_eq!(plural_ru(21, forms), "проверка");
+    }
+
+    /// A negative count cannot happen, but the helper must not panic if one arrives.
+    #[test]
+    fn russian_plural_handles_absurd_input_without_panicking() {
+        let forms = ("а", "б", "в");
+        assert_eq!(plural_ru(0, forms), "в");
+        // usize cannot be negative; the guard is for the zero path, which is the one a
+        // counter actually reaches when a check has not run yet.
     }
 }
