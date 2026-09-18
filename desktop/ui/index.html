@@ -1,4 +1,7 @@
 <!DOCTYPE html>
+<!-- `lang` is written by the shell before this document is parsed (see `lang_script`
+     in src/main.rs). The value here is the fallback for opening the file directly in a
+     browser, where no shell is present: the front end then decides from `navigator`. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -251,11 +254,17 @@
       <p class="headline" id="headline">No scan has been run yet.</p>
 
       <details class="rec" id="rec-wrap">
-        <summary class="rec-summary">
-          <span class="micro" data-i18n="rec.actions">Recommended actions</span>
+        <!-- `aria-controls` names what the summary opens. A bare `<details>` is
+             announced as expandable, but nothing tells assistive technology *what*
+             it expands, so the list arrives unlabelled. The count is inside the
+             summary for the same reason: "Recommended actions (6)" is the fact a
+             reader acts on, and it should be heard before the list is opened, not
+             after. -->
+        <summary class="rec-summary" aria-controls="rec-list">
+          <span class="micro" id="rec-actions-label" data-i18n="rec.actions">Recommended actions</span>
           <span class="rec-count" id="rec-count"></span>
         </summary>
-        <ol class="rec-list" id="rec-list"></ol>
+        <ol class="rec-list" id="rec-list" aria-labelledby="rec-actions-label"></ol>
       </details>
     </div>
   </section>

@@ -188,18 +188,26 @@ struct Containment {
 /// stale value in the interface fails loudly instead of silently doing nothing.
 #[tauri::command]
 fn disable_service(name: String, report_path: String) -> Result<Containment, String> {
-    let action = irscan::remediate::Action::DisableService {
+    let requested = irscan::remediate::Action::DisableService {
         name: name.trim().to_string(),
-        previous_start: 2,
+        // Filled in by `prepare` from the machine's real value, never guessed here:
+        // an undo line that restores a start type the service never had is worse than
+        // no undo line, because it looks authoritative.
+        previous_start: 0,
     };
-    let applied = act::apply(&action)?;
 
+    // Read first, write the record, and only then change anything. The order is the
+    // guarantee: if the record cannot be written, nothing has been modified yet, so
+    // the error is a clean refusal rather than a machine changed with no way back.
+    let action = act::prepare(&requested)?;
     let undo = act::undo_path(&PathBuf::from(report_path.trim()));
     act::write_undo_record(
         &undo,
         std::slice::from_ref(&action),
         &irscan::win::local_time_string(),
     )?;
+
+    let applied = act::apply(&action)?;
 
     Ok(Containment {
         description: applied.description,
@@ -216,20 +224,25 @@ fn remove_autostart(
     value: String,
     report_path: String,
 ) -> Result<Containment, String> {
-    let action = irscan::remediate::Action::RemoveAutostart {
+    let requested = irscan::remediate::Action::RemoveAutostart {
         hive: hive.trim().to_string(),
         key: key.trim().to_string(),
         value: value.trim().to_string(),
+        // Filled in by `prepare` from the value's real contents. This is the whole
+        // point of the record: without it the undo line says to restore an empty
+        // string, and running it would destroy what was there.
         previous_data: String::new(),
     };
-    let applied = act::apply(&action)?;
 
+    let action = act::prepare(&requested)?;
     let undo = act::undo_path(&PathBuf::from(report_path.trim()));
     act::write_undo_record(
         &undo,
         std::slice::from_ref(&action),
         &irscan::win::local_time_string(),
     )?;
+
+    let applied = act::apply(&action)?;
 
     Ok(Containment {
         description: applied.description,
@@ -242,8 +255,49 @@ fn main() {
     // `expect` is denied crate-wide, so the fallible `run` is handled explicitly. The
     // only realistic failure is a missing WebView2 runtime, and saying that plainly beats
     // a window that opens blank and looks like a bug in the tool.
+    // The OS language, set on the document before the page is parsed.
+    //
+    // `index.html` declares `lang="en"`, and the front end used to decide from
+    // `navigator.language` - which WebView2 answers with `en-US` even on a Russian
+    // machine. The result was a window painted in English that repainted in Russian
+    // once `app_info` resolved. An init script runs before the document is built, so
+    // the first paint already has the right answer and `app_info` only confirms it.
+    //
+    // The value is one of two literals from `locale::language()`, never collected data,
+    // so interpolating it into a script is safe; it is still written as a JSON string
+    // rather than pasted between quotes.
+    let lang_script = format!(
+        "document.documentElement.setAttribute('lang', {});",
+        serde_json::to_string(locale::language()).unwrap_or_else(|_| "\"en\"".to_string())
+    );
+
     if let Err(e) = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            // The window is declared in `tauri.conf.json`, which cannot carry code, so it
+            // is built here instead and given the language script. `app.windows` in that
+            // file is deliberately empty - restoring an entry there would open a second
+            // window, because this call would still run. Building it in `setup`
+            // rather than editing the config is what lets `initialization_script` be
+            // used: it is a builder method, and the runtime guarantees it runs after the
+            // global object exists but **before the document is parsed** - which is why
+            // the first paint is already in the right language rather than repainted.
+            //
+            // The config's window entry is removed in `tauri.conf.json`; if that is ever
+            // restored, this would open a second window, so the two must change together.
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                .title("IRScan - read-only endpoint triage")
+                .inner_size(1280.0, 840.0)
+                .min_inner_size(900.0, 600.0)
+                .resizable(true)
+                .center()
+                .theme(Some(tauri::Theme::Dark))
+                .background_color(tauri::window::Color(10, 10, 10, 255))
+                .initialization_script(&lang_script)
+                .build()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            Ok(())
+        })
         .manage(AppState::default())
         .manage(LastScan::default())
         .invoke_handler(tauri::generate_handler![
@@ -291,6 +345,47 @@ mod tests {
         assert!(
             source.contains("cfg_attr(not(debug_assertions), windows_subsystem"),
             "the console must stay available in debug builds"
+        );
+    }
+
+    /// The window is built in Rust, so `tauri.conf.json` must not declare one.
+    ///
+    /// The language has to be set before the document is parsed, and the only API for that
+    /// (`initialization_script`) is a builder method. The window therefore moved out of
+    /// the config and into `setup`. If a `windows` entry is ever restored there, Tauri
+    /// creates it *and* this code creates its own, and the user gets two windows. The
+    /// coupling is invisible in either file alone, so it is pinned here.
+    #[test]
+    fn the_config_does_not_also_declare_a_window() {
+        let config = include_str!("../tauri.conf.json");
+        let parsed: serde_json::Value =
+            serde_json::from_str(config).expect("tauri.conf.json must be valid JSON");
+        let windows = parsed["app"]["windows"]
+            .as_array()
+            .expect("app.windows must be an array");
+
+        if !windows.is_empty() {
+            let source = include_str!("main.rs");
+            assert!(
+                !source.contains("WebviewWindowBuilder::new"),
+                "the window is declared in tauri.conf.json and built in main.rs; \
+                 that opens two windows - keep exactly one of them"
+            );
+        }
+    }
+
+    /// The language tag reaches the document as a JSON string, never pasted raw.
+    ///
+    /// `locale::language()` returns one of two literals today, but writing it into a
+    /// script by interpolation is the shape that becomes an injection the moment the
+    /// function returns anything richer. The script is built with `serde_json::to_string`,
+    /// and this pins that it stays that way.
+    #[test]
+    fn the_language_script_quotes_its_value() {
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains("serde_json::to_string(locale::language())"),
+            "the language must be JSON-encoded before it is written into a script"
         );
     }
 }

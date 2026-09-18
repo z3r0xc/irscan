@@ -603,11 +603,36 @@
     return /^ru\b/i.test(String(tag || "")) ? "ru" : "en";
   }
 
-  /** The tag a browser can offer, for the fallback path. */
+  /**
+   * The tag a browser can offer, for the fallback path only.
+   *
+   * This is the LAST choice, not the first. Tauri's WebView2 reports `en-US` through
+   * `navigator.language` regardless of the locale the user set, so a machine whose
+   * Get-Culture, Get-UICulture and Get-WinSystemLocale all say `ru-RU` gets `en-US`
+   * here — that defect is why the shell decides the language in Rust and why this
+   * function is not consulted while a shell is present.
+   */
   function navigatorTag() {
     var n = null;
     try { n = typeof navigator !== "undefined" ? navigator : null; } catch (e) { n = null; }
     return n ? (n.languages && n.languages.length ? n.languages[0] : n.language) : "";
+  }
+
+  /**
+   * The tag the document already carries, if anything set one.
+   *
+   * `<html lang>` is the standard place for this and is what the shell writes once
+   * `app_info` arrives. Reading it before `navigator` means the first paint uses the
+   * same answer the shell will give, so the window does not flash English and repaint
+   * Russian — and a page opened outside the shell still falls through to `navigator`.
+   */
+  function documentTag() {
+    try {
+      if (typeof document === "undefined") return "";
+      return document.documentElement ? document.documentElement.getAttribute("lang") : "";
+    } catch (e) {
+      return "";
+    }
   }
 
   var DICT = EN;
@@ -628,7 +653,9 @@
     FALLBACK = LANG === "ru" ? EN : RU;
   }
 
-  setLanguage(languageOf(navigatorTag()));
+  // Fallback order: what the document already says, then the browser. The shell
+  // overwrites this with the OS locale as soon as `app_info` resolves.
+  setLanguage(languageOf(documentTag() || navigatorTag()));
 
   /**
    * The one way a visible string is produced.
@@ -1798,6 +1825,11 @@
         dom.groupList.setAttribute("aria-activedescendant", li.id);
       }
     });
+
+    // After the rows are in the DOM, not before: the class depends on the height the
+    // browser computes from them, and a check run on the empty list would always say
+    // there is nothing to scroll.
+    updateListScrollState();
   }
 
   function renderDetail() {
@@ -2621,6 +2653,7 @@
     });
     dom.search.addEventListener("keydown", onSearchKey);
 
+    dom.groupList.addEventListener("scroll", updateListScrollState, { passive: true });
     dom.groupList.addEventListener("click", function (e) {
       var node = e.target;
       while (node && node !== dom.groupList) {
@@ -3143,6 +3176,26 @@
     }, function (err) {
       dom.wzView.textContent = t("wz.result.viewFail", { message: describeError(err) });
     });
+  }
+
+  /**
+   * Keep the findings list's scroll affordance honest.
+   *
+   * The list is a fixed-height pane holding more rows than fit - measured 8 rows in
+   * a 242px box - and a row cut off mid-card is indistinguishable from the end of
+   * the list. Two classes carry the state: `is-scrollable` while there is more
+   * below, `is-at-end` once there is not. Both are recomputed on scroll and after a
+   * render, because the list changes length on every scan and every filter.
+   */
+  function updateListScrollState() {
+    var list = dom.groupList;
+    if (!list) return;
+    var pane = list.closest(".pane-list") || list.parentElement;
+    if (!pane) return;
+    var scrollable = list.scrollHeight > list.clientHeight + 1;
+    var atEnd = list.scrollTop + list.clientHeight >= list.scrollHeight - 2;
+    pane.classList.toggle("is-scrollable", scrollable);
+    pane.classList.toggle("is-at-end", atEnd);
   }
 
   function cacheWizardDom() {

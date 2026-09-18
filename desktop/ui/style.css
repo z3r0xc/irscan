@@ -711,6 +711,16 @@ body {
 }
 
 /* The list is its own scroll container: adding rows never grows the page. */
+/* The scrollable findings list.
+ *
+ * `scrollbar-gutter: stable` reserves the track whether or not a scrollbar is
+ * drawn, so a list that becomes scrollable does not shift the rows sideways by
+ * its own scrollbar's width.
+ *
+ * `scrollbar-color` is set because the default Windows scrollbar is a light-grey
+ * overlay that reads as a foreign element in a strictly monochrome panel, and on
+ * a dark background it is the brightest thing on screen.
+ */
 .group-list {
   margin: 0;
   padding: 0;
@@ -718,7 +728,43 @@ body {
   overflow-y: auto;
   min-height: 0;
   outline: none;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
 }
+.group-list::-webkit-scrollbar { width: 8px; }
+.group-list::-webkit-scrollbar-track { background: transparent; }
+.group-list::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 4px;
+}
+.group-list::-webkit-scrollbar-thumb:hover { background: var(--ink-5); }
+
+/* A row cut off mid-card tells the reader nothing about whether the list continues.
+ * Measured: 8 findings in a 242px box, so five of them sat below the fold behind a
+ * list that looked finished. The pane carries a hairline at its base while there is
+ * more to scroll to, and it is removed at the end - a static divider would still be
+ * there when there is nothing left, which is the same lie in the other direction.
+ * The state is a class rather than `:has()` so it works on the WebView2 that ships
+ * with Windows 10. */
+.pane-list {
+  position: relative;
+}
+.pane-list::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  background: linear-gradient(to bottom, transparent, var(--bg) 78%);
+}
+.pane-list.is-scrollable::after { opacity: 1; }
+/* At the end of the list there is nothing below, so the hint comes off. */
+.pane-list.is-at-end::after { opacity: 0; }
 
 .group-row {
   display: grid;
