@@ -1332,7 +1332,28 @@ body:has(#wizard.wizard-cover) .status {
    reduced to a cross-fade at the end of this file. */
 #wstep-welcome:not(.is-on) { transform: translateY(-14px); }
 
-.wz-inner { max-width: 74ch; margin: auto 0; padding: var(--sp-2) 0 var(--sp-5); }
+/* The reading column.
+ *
+ * `margin: auto` on both axes, not `auto 0`: the panel is a column flex container,
+ * so an `auto` cross-axis margin centres the block horizontally while the vertical
+ * `auto` keeps it optically centred when the step is short. With `auto 0` the text
+ * sat against the left edge of a 1280px window with more than half the width empty
+ * beside it - the first thing a reader notices, and it reads as a layout that was
+ * never finished.
+ *
+ * The width stays in `ch` because it is a reading measure, not a pixel count: at
+ * 74 characters a line the eye can find the start of the next line, and the limit
+ * holds whatever font the machine resolves to.
+ */
+.wz-inner {
+  max-width: 74ch;
+  margin: auto;
+  padding: var(--sp-2) var(--pad) var(--sp-5);
+  width: 100%;
+}
+/* The result step is a table of evidence, not prose, so it takes the full width
+   and keeps its own padding - it must not be squeezed into a reading measure. */
+.wz-result-wrap { max-width: none; padding-inline: var(--pad); }
 
 .wz-title {
   margin: 0 0 var(--sp-4);
@@ -1462,7 +1483,6 @@ body:has(#wizard.wizard-cover) .status {
 
 /* ------------------------------------------------------------ report step -- */
 
-.wz-result-wrap { max-width: none; }
 
 .wz-headline {
   margin: 0 0 var(--sp-5);

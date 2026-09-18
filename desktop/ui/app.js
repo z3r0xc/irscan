@@ -3111,15 +3111,21 @@
     // is the button's own state and the reader concludes nothing happened. The CSS
     // file turns motion off under `prefers-reduced-motion`, and this scroll is
     // instant rather than smooth, so nothing here needs to ask about the setting.
-    // The scrolling element is the step panel, not the window - the layout gives
-    // `.wz-panel` its own `overflow: auto`, and `.wz-inner` centres with `margin:
-    // auto 0`, so scrolling the document does nothing. The scroll has to happen
-    // after the browser has laid the newly unhidden panel out, otherwise the
-    // container still reports its old height and the scroll lands at zero.
+    // Bring the *top* of the panel into view. The scrolling element is the step
+    // panel, not the window - the layout gives `.wz-panel` its own `overflow: auto`
+    // and `.wz-inner` centres with `margin: auto 0`, so scrolling the document does
+    // nothing.
+    //
+    // It must land on the top, not the bottom: the report starts with the verdict and
+    // the machine's identity, and a reader who is shown the middle of a document has
+    // no way to tell it is the middle. Both the offset and the height are only known
+    // after the browser has laid the newly unhidden panel out, hence the frame delay.
     var scroller = dom.wzViewPanel.closest(".wz-panel") || dom.wzViewPanel.parentElement;
     if (scroller) {
-      var toBottom = function () { scroller.scrollTop = scroller.scrollHeight; };
-      window.requestAnimationFrame(toBottom);
+      window.requestAnimationFrame(function () {
+        var top = dom.wzViewPanel.offsetTop;
+        scroller.scrollTop = Math.max(0, top - 12);
+      });
     }
 
     if (Wiz.report != null) {
